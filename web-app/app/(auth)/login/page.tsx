@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import axios from 'axios';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -14,19 +15,19 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
 
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
-    });
+    try {
+      const res = await axios.post('/api/auth/login', form);
+      const data = res.data;
+      setLoading(false);
 
-    const data = await res.json();
-    setLoading(false);
-
-    if (res.ok) {
-      router.push('/dashboard'); // Redirect after successful login
-    } else {
-      setError(data.error);
+      if (res.status === 200) {
+        router.push('/dashboard'); // Redirect after successful login
+      } else {
+        setError(data.error);
+      }
+    } catch (error: any) {
+      setLoading(false);
+      setError(error.response?.data?.error || 'Login failed');
     }
   }
 

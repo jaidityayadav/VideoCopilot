@@ -139,11 +139,6 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ proje
             where: { projectId: projectId }
         });
 
-        // Delete all invitations for this project
-        await prisma.invitation.deleteMany({
-            where: { projectId: projectId }
-        });
-
         // Delete the project
         await prisma.project.delete({
             where: { id: projectId }

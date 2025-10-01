@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import axios from 'axios';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -14,19 +15,19 @@ export default function SignupPage() {
     setLoading(true);
     setError('');
 
-    const res = await fetch('/api/auth/signup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
-    });
+    try {
+      const res = await axios.post('/api/auth/signup', form);
+      const data = res.data;
+      setLoading(false);
 
-    const data = await res.json();
-    setLoading(false);
-
-    if (res.ok) {
-      router.push('/login');
-    } else {
-      setError(data.error);
+      if (res.status === 201) {
+        router.push('/login');
+      } else {
+        setError(data.error);
+      }
+    } catch (error: any) {
+      setLoading(false);
+      setError(error.response?.data?.error || 'Signup failed');
     }
   }
 

@@ -2,11 +2,11 @@
 
 import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
+import axios from "axios";
 
 interface Video {
     id: string;
     s3Key: string;
-    transcript: any;
 }
 
 interface VideoWithSignedUrl extends Video {
@@ -39,17 +39,16 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
 
     const fetchSignedUrl = async (s3Key: string, videoId: string): Promise<string> => {
         try {
-            const response = await fetch('/api/signed-url', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: s3Key, videoId }),
+            const response = await axios.post('/api/signed-url', {
+                key: s3Key,
+                videoId
             });
 
-            if (!response.ok) {
+            if (response.status !== 200) {
                 throw new Error('Failed to get signed URL');
             }
 
-            const { signedUrl } = await response.json();
+            const { signedUrl } = response.data;
             return signedUrl;
         } catch (error) {
             console.error('Error fetching signed URL:', error);
@@ -59,9 +58,9 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
 
     const fetchProject = async () => {
         try {
-            const response = await fetch(`/api/projects/${resolvedParams.projectId}`);
+            const response = await axios.get(`/api/projects/${resolvedParams.projectId}`);
 
-            if (!response.ok) {
+            if (response.status !== 200) {
                 if (response.status === 404) {
                     setError("Project not found");
                 } else if (response.status === 401) {
@@ -73,7 +72,7 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                 return;
             }
 
-            const data = await response.json();
+            const data = response.data;
             setProject(data.project);
 
             // Fetch signed URLs for all videos
@@ -105,12 +104,10 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
         setDeleting(true);
 
         try {
-            const response = await fetch(`/api/projects/${project.id}`, {
-                method: 'DELETE',
-            });
+            const response = await axios.delete(`/api/projects/${project.id}`);
 
-            if (!response.ok) {
-                const errorData = await response.json();
+            if (response.status !== 200) {
+                const errorData = response.data;
                 throw new Error(errorData.error || 'Failed to delete project');
             }
 
@@ -136,12 +133,10 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
         setDeletingVideos(prev => new Set(prev).add(videoId));
 
         try {
-            const response = await fetch(`/api/projects/${project?.id}/videos/${videoId}`, {
-                method: 'DELETE',
-            });
+            const response = await axios.delete(`/api/projects/${project?.id}/videos/${videoId}`);
 
-            if (!response.ok) {
-                const errorData = await response.json();
+            if (response.status !== 200) {
+                const errorData = response.data;
                 throw new Error(errorData.error || 'Failed to delete video');
             }
 
@@ -317,7 +312,7 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                                             <h3 className="font-semibold mb-2">Video {index + 1}</h3>
                                             <div className="flex items-center justify-between text-sm text-gray-400">
                                                 <span>
-                                                    {video.transcript ? 'Transcript available' : 'Processing...'}
+                                                    Video ready
                                                 </span>
                                                 <button className="text-blue-400 hover:text-blue-300 transition">
                                                     View Details

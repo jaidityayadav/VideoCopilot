@@ -10,7 +10,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { s3Key, transcript } = await req.json();
+    const { s3Key } = await req.json();
 
     if (!s3Key) {
       return NextResponse.json({ error: "S3 key is required" }, { status: 400 });
@@ -31,7 +31,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
     const video = await prisma.video.create({
       data: {
         s3Key,
-        transcript: transcript || null,
         projectId,
       },
     });

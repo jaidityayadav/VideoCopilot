@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import axios from "axios";
 
 interface Project {
     id: string;
@@ -25,9 +26,9 @@ export default function Dashboard() {
 
     const fetchProjects = async () => {
         try {
-            const response = await fetch('/api/projects');
+            const response = await axios.get('/api/projects');
 
-            if (!response.ok) {
+            if (response.status !== 200) {
                 if (response.status === 401) {
                     router.push('/login');
                     return;
@@ -35,7 +36,7 @@ export default function Dashboard() {
                 throw new Error('Failed to fetch projects');
             }
 
-            const data = await response.json();
+            const data = response.data;
             setProjects(data.projects || []);
         } catch (err) {
             setError('Failed to load projects');
@@ -46,7 +47,7 @@ export default function Dashboard() {
 
     const handleLogout = async () => {
         try {
-            await fetch('/api/auth/logout', { method: 'POST' });
+            await axios.post('/api/auth/logout');
             router.push('/login');
         } catch (error) {
             console.error('Logout failed:', error);
@@ -65,12 +66,10 @@ export default function Dashboard() {
         setDeletingProjects(prev => new Set(prev).add(projectId));
 
         try {
-            const response = await fetch(`/api/projects/${projectId}`, {
-                method: 'DELETE',
-            });
+            const response = await axios.delete(`/api/projects/${projectId}`);
 
-            if (!response.ok) {
-                const errorData = await response.json();
+            if (response.status !== 200) {
+                const errorData = response.data;
                 throw new Error(errorData.error || 'Failed to delete project');
             }
 

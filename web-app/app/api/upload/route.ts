@@ -20,9 +20,14 @@ export async function POST(req: Request) {
 
     const formData = await req.formData();
     const file = formData.get('file') as File;
+    const projectId = formData.get('projectId') as string;
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    }
+
+    if (!projectId) {
+      return NextResponse.json({ error: "Project ID is required" }, { status: 400 });
     }
 
     // Validate file type
@@ -30,10 +35,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Only video files are allowed" }, { status: 400 });
     }
 
-    // Generate unique key
+    // Generate unique key with proper structure: userId/projectId/videos/filename
     const timestamp = Date.now();
     const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const key = `uploads/${userId}/${timestamp}-${safeName}`;
+    const key = `${userId}/${projectId}/videos/${timestamp}-${safeName}`;
 
     // Convert file to buffer
     const bytes = await file.arrayBuffer();

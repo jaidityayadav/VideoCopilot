@@ -1,0 +1,31 @@
+{
+    "name": "@videocopilot/common",
+    "version": "1.0.0",
+    "description": "Shared schema and type definitions for VideoCopilot services",
+    "main": "index.js",
+    "scripts": {
+        "generate": "npx tsx scripts/generate-types.ts",
+        "generate:typescript": "npx tsx scripts/generate-typescript.ts",
+        "generate:python": "npx tsx scripts/generate-python-models.ts",
+        "generate:all": "npm run generate:typescript && npm run generate:python",
+        "db:push": "prisma db push --schema=schema/schema.prisma",
+        "db:migrate": "prisma migrate dev --schema=schema/schema.prisma"
+    },
+    "dependencies": {
+        "@prisma/client": "^6.14.0",
+        "prisma": "^6.14.0"
+    },
+    "devDependencies": {
+        "typescript": "^5.0.0",
+        "@types/node": "^20.0.0",
+        "tsx": "^4.0.0"
+    },
+    "keywords": [
+        "prisma",
+        "schema",
+        "types",
+        "shared"
+    ],
+    "author": "VideoCopilot Team",
+    "license": "MIT"
+}

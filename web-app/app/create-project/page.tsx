@@ -2,6 +2,7 @@
 
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
+import axios from "axios";
 
 interface UploadedVideo {
   file: File;
@@ -17,6 +18,7 @@ export default function CreateProject() {
   const [isUploading, setIsUploading] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [projectId, setProjectId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
@@ -46,30 +48,32 @@ export default function CreateProject() {
   };
 
   // Handle file upload to S3 via server
-  const uploadVideoToS3 = async (file: File): Promise<string> => {
+  const uploadVideoToS3 = async (file: File, projectId: string): Promise<string> => {
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('projectId', projectId);
 
-    const uploadResponse = await fetch('/api/upload', {
-      method: 'POST',
-      body: formData,
+    const uploadResponse = await axios.post('/api/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
     });
 
-    if (!uploadResponse.ok) {
-      const errorData = await uploadResponse.json();
+    if (uploadResponse.status !== 200) {
+      const errorData = uploadResponse.data;
       throw new Error(errorData.error || 'Failed to upload file');
     }
 
-    const { key } = await uploadResponse.json();
+    const { key } = uploadResponse.data;
     return key;
   };
 
-  // Handle file selection
+  // Handle file selection - just prepare files, don't upload yet
   const handleFiles = async (files: File[]) => {
     const videoFiles = files.filter(file => file.type.startsWith('video/'));
 
     for (const file of videoFiles) {
-      // Add file to list with uploading state
+      // Add file to list with processing state
       const tempId = Date.now() + Math.random();
       setVideos(prev => [...prev, {
         file,
@@ -81,13 +85,10 @@ export default function CreateProject() {
         // Generate thumbnail
         const thumbnail = await generateThumbnail(file);
 
-        // Upload to S3
-        const s3Key = await uploadVideoToS3(file);
-
-        // Update the video entry with success
+        // Update the video entry with thumbnail (ready for upload)
         setVideos(prev => prev.map(video =>
           video.s3Key === `temp-${tempId}`
-            ? { ...video, s3Key, thumbnail, uploading: false }
+            ? { ...video, thumbnail, uploading: false }
             : video
         ));
       } catch (error) {
@@ -96,7 +97,7 @@ export default function CreateProject() {
         // Update the video entry with error
         setVideos(prev => prev.map(video =>
           video.s3Key === `temp-${tempId}`
-            ? { ...video, uploading: false, error: error instanceof Error ? error.message : 'Upload failed' }
+            ? { ...video, uploading: false, error: error instanceof Error ? error.message : 'Processing failed' }
             : video
         ));
       }
@@ -136,7 +137,7 @@ export default function CreateProject() {
     setVideos(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Create project with videos
+  // Create project first, then handle video uploads
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -145,43 +146,60 @@ export default function CreateProject() {
       return;
     }
 
-    // Filter out videos that are still uploading or have errors
-    const successfulVideos = videos.filter(video => !video.uploading && !video.error && video.s3Key && !video.s3Key.startsWith('temp-'));
+    if (videos.length === 0) {
+      alert('Please add at least one video');
+      return;
+    }
 
-    if (successfulVideos.length === 0) {
-      alert('Please wait for videos to finish uploading or upload valid videos');
+    // Check if videos are still uploading
+    if (videos.some(v => v.uploading)) {
+      alert('Please wait for videos to finish uploading');
       return;
     }
 
     setIsCreating(true);
 
     try {
-      // Create project
-      const projectResponse = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: projectName.trim(),
-          thumbnail: successfulVideos[0].thumbnail // Use first video's thumbnail as project thumbnail
-        }),
+      // Create project first
+      const projectResponse = await axios.post('/api/projects', {
+        name: projectName.trim()
       });
 
-      if (!projectResponse.ok) {
-        const errorData = await projectResponse.json();
+      if (projectResponse.status !== 200 && projectResponse.status !== 201) {
+        const errorData = projectResponse.data;
         throw new Error(errorData.error || 'Failed to create project');
       }
 
-      const { project } = await projectResponse.json();
+      const { project } = projectResponse.data;
+      setProjectId(project.id);
 
-      // Upload videos to project
-      for (const video of successfulVideos) {
-        await fetch(`/api/projects/${project.id}/videos`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            s3Key: video.s3Key,
-            transcript: null // Will be processed later
-          }),
+      // Now upload videos with the project ID and add them to the project
+      const successfulUploads = [];
+
+      for (const videoData of videos) {
+        if (!videoData.error) {
+          try {
+            // Upload to S3 with proper path structure
+            const s3Key = await uploadVideoToS3(videoData.file, project.id);
+
+            // Add video to project in database
+            await axios.post(`/api/projects/${project.id}/videos`, {
+              s3Key: s3Key
+            });
+
+            successfulUploads.push({ ...videoData, s3Key });
+          } catch (error) {
+            console.error('Error uploading video:', videoData.file.name, error);
+            // Continue with other videos
+          }
+        }
+      }
+
+      // Update project thumbnail if we have successful uploads with thumbnails
+      const videoWithThumbnail = successfulUploads.find(v => v.thumbnail);
+      if (videoWithThumbnail) {
+        await axios.put(`/api/projects/${project.id}`, {
+          thumbnail: videoWithThumbnail.thumbnail
         });
       }
 
@@ -369,16 +387,16 @@ export default function CreateProject() {
             {isCreating ? (
               <>
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                <span>Creating Project...</span>
+                <span>Creating Project & Uploading Videos...</span>
               </>
             ) : videos.some(v => v.uploading) ? (
               <>
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                <span>Uploading Videos...</span>
+                <span>Processing Videos...</span>
               </>
             ) : (
               <>
-                <span>Create Project</span>
+                <span>Create Project & Upload Videos</span>
                 <span>({videos.filter(v => !v.error && !v.uploading).length} video{videos.filter(v => !v.error && !v.uploading).length !== 1 ? 's' : ''})</span>
               </>
             )}
