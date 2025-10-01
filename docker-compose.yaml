@@ -1,0 +1,27 @@
+services:
+  db:
+    image: postgres:17.4
+    container_name: videocopilot-db
+    env_file:
+      - ./web-app/.env.docker
+    environment:
+      POSTGRES_USER: videocopilotuser
+      POSTGRES_PASSWORD: videocopilotpass
+      POSTGRES_DB: videocopilotdb
+    volumes:
+      - videocopilot_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  web:
+    build: ./web-app
+    container_name: videocopilot-web
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://videocopilotuser:videocopilotpass@db:5432/videocopilotdb
+    depends_on:
+      - db
+
+volumes:
+  videocopilot_postgres_data:
