@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { Pinecone } from '@pinecone-database/pinecone';
 import prisma from '@/lib/prisma';
 import { verifyTokenFromCookies } from '@/lib/auth';
 
@@ -9,6 +10,11 @@ const s3 = new S3Client({
         accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
     },
+});
+
+// Initialize Pinecone client
+const pc = new Pinecone({
+    apiKey: process.env.PINECONE_API_KEY!,
 });
 
 // GET - Fetch a single project by ID
@@ -174,6 +180,19 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ proje
 
         // Wait for all S3 deletions to complete (or fail)
         await Promise.allSettled(deletePromises);
+
+        // Delete Pinecone vectors for this project
+        try {
+            const indexName = process.env.PINECONE_INDEX_NAME || 'vidwise-embeddings';
+            const index = pc.index(indexName);
+
+            // Delete all vectors in the project's namespace
+            await index.namespace(projectId).deleteAll();
+            console.log(`Deleted Pinecone vectors for project namespace: ${projectId}`);
+        } catch (error) {
+            console.error(`Failed to delete Pinecone vectors for project ${projectId}:`, error);
+            // Don't fail the entire deletion if Pinecone cleanup fails
+        }
 
         // Delete database records in the correct order due to foreign key constraints
         // 1. First delete all transcripts for videos in this project

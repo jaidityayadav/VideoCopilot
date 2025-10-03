@@ -5,6 +5,7 @@ import re
 from typing import List, Dict, Any
 from pathlib import Path
 from contextlib import asynccontextmanager
+import httpx
 
 import whisper
 import boto3
@@ -398,6 +399,30 @@ def format_timestamp(seconds: float) -> str:
     
     return f"{hours:02d}:{minutes:02d}:{seconds_int:02d},{milliseconds:03d}"
 
+async def trigger_embedding_generation(project_id: str):
+    """
+    Trigger embedding generation for the project in the background
+    """
+    try:
+        embedding_service_url = os.getenv('EMBEDDING_SERVICE_URL', 'http://localhost:8001')
+        
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(
+                f"{embedding_service_url}/generate-embeddings",
+                json={"project_id": project_id}
+            )
+            
+            if response.status_code == 200:
+                print(f"🚀 Successfully triggered embedding generation for project {project_id}")
+            else:
+                print(f"⚠️ Embedding service responded with status {response.status_code} for project {project_id}")
+                
+    except httpx.TimeoutException:
+        print(f"⚠️ Embedding service request timed out for project {project_id} (this is expected for long-running operations)")
+    except Exception as e:
+        print(f"⚠️ Failed to trigger embedding generation for project {project_id}: {str(e)}")
+        # Don't raise the exception - embedding generation is optional
+
 async def check_and_update_project_status(project_id: str):
     """
     Check if all videos in project are done and update project status accordingly
@@ -419,6 +444,11 @@ async def check_and_update_project_status(project_id: str):
                 "processedVideos": len(videos)
             }
         )
+        
+        # Trigger embedding generation in the background
+        print(f"🧠 All videos processed for project {project_id}, triggering embedding generation...")
+        asyncio.create_task(trigger_embedding_generation(project_id))
+        print(f"✅ Embedding generation started in background for project {project_id}")
 
 async def convert_srt_to_txt_and_upload(transcript_id: str, srt_content: str, user_id: str, project_id: str, video_id: str, language: str) -> str:
     """
