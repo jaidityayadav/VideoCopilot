@@ -74,7 +74,7 @@ async def process_video(request: ProcessVideoRequest):
     Main endpoint to process video and generate transcripts
     """
     try:
-        # Get project owner ID from database
+        # Validate that project exists
         project = await prisma.project.find_unique(
             where={"id": request.project_id},
             include={"owner": True}
@@ -83,13 +83,33 @@ async def process_video(request: ProcessVideoRequest):
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        user_id = project.owner.id
-        
-        # Update video status to PROCESSING
+        # Update video status to PROCESSING immediately
         await prisma.video.update(
             where={"id": request.video_id},
             data={"status": "PROCESSING"}
         )
+        
+        # Start processing in background (don't await)
+        asyncio.create_task(process_video_background(request, project.owner.id))
+        
+        # Return immediately with accepted status
+        return ProcessVideoResponse(
+            video_id=request.video_id,
+            transcripts=[],
+            status="processing_started"
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
+
+async def process_video_background(request: ProcessVideoRequest, user_id: str):
+    """
+    Background task to process video and generate transcripts
+    """
+    video_file_path = None
+    
+    try:
+        print(f"🎬 Starting background processing for video {request.video_id}")
         
         # Download video from S3
         video_file_path = await download_video_from_s3(request.video_s3_url)
@@ -97,17 +117,23 @@ async def process_video(request: ProcessVideoRequest):
         # Process transcripts for each language
         transcripts = []
         for language in request.languages:
-            transcript_data = await process_transcript(
-                video_file_path, 
-                language, 
-                user_id, 
-                request.project_id, 
-                request.video_id
-            )
-            transcripts.append(transcript_data)
+            try:
+                transcript_data = await process_transcript(
+                    video_file_path, 
+                    language, 
+                    user_id, 
+                    request.project_id, 
+                    request.video_id
+                )
+                transcripts.append(transcript_data)
+                print(f"✅ Completed transcript for {language}")
+            except Exception as e:
+                print(f"❌ Failed to process transcript for {language}: {str(e)}")
+                # Continue with other languages
         
         # Clean up temporary video file
-        os.unlink(video_file_path)
+        if video_file_path and os.path.exists(video_file_path):
+            os.unlink(video_file_path)
         
         # Update video status to DONE
         await prisma.video.update(
@@ -118,20 +144,22 @@ async def process_video(request: ProcessVideoRequest):
         # Check if all videos in project are done
         await check_and_update_project_status(request.project_id)
         
-        return ProcessVideoResponse(
-            video_id=request.video_id,
-            transcripts=transcripts,
-            status="completed"
-        )
+        print(f"🎉 Completed processing video {request.video_id} with {len(transcripts)} transcripts")
         
     except Exception as e:
-        # Update video status to indicate error (you might want to add an ERROR status)
-        await prisma.video.update(
-            where={"id": request.video_id},
-            data={"status": "PENDING"}  # Reset to pending on error
-        )
+        print(f"❌ Error in background processing: {str(e)}")
+        # Update video status to indicate error
+        try:
+            await prisma.video.update(
+                where={"id": request.video_id},
+                data={"status": "PENDING"}  # Reset to pending on error
+            )
+        except:
+            pass  # Don't fail if we can't update status
         
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        # Clean up temporary files
+        if video_file_path and os.path.exists(video_file_path):
+            os.unlink(video_file_path)
 
 async def download_video_from_s3(s3_url: str) -> str:
     """

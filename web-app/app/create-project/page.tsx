@@ -12,6 +12,15 @@ interface UploadedVideo {
   error?: string;
 }
 
+interface ProcessVideoResponse {
+  video_id: string;
+  transcripts: Array<{
+    language: string;
+    srt_url: string;
+  }>;
+  status: 'processing_started' | 'completed' | 'error';
+}
+
 const SUPPORTED_LANGUAGES = {
   'en': 'English',
   'es': 'Spanish',
@@ -259,11 +268,15 @@ export default function CreateProject() {
               video_id: videoRecord.id,
               languages: selectedLanguages
             }, {
-              withCredentials: true
+              withCredentials: true,
+              timeout: 10000 // 10 second timeout for the request initiation
             });
 
-            if (processingResponse.status === 200) {
+            // Check if processing was started successfully
+            if (processingResponse.status === 200 && 
+                (processingResponse.data.status === 'processing_started' || processingResponse.data.status === 'completed')) {
               processingStarted++;
+              console.log(`✅ Started processing for video: ${videoRecord.id}`);
             }
           }
         } catch (error) {
@@ -274,9 +287,13 @@ export default function CreateProject() {
 
       // Show user feedback about processing
       if (processingStarted > 0) {
-        alert(`Project created successfully! Processing started for ${processingStarted} video${processingStarted !== 1 ? 's' : ''} in ${selectedLanguages.length} language${selectedLanguages.length !== 1 ? 's' : ''}. You can monitor progress on the project page.`);
+        alert(`🎉 Project created successfully! Processing started for ${processingStarted} video${processingStarted !== 1 ? 's' : ''} in ${selectedLanguages.length} language${selectedLanguages.length !== 1 ? 's' : ''}. 
+
+Processing will continue in the background. You can monitor progress on the project page.`);
       } else if (successfulUploads.length > 0) {
-        alert('Project created successfully, but video processing could not be started. You can try again from the project page.');
+        alert('⚠️ Project created successfully, but video processing could not be started. You can try again from the project page.');
+      } else {
+        alert('❌ Project created but no videos were uploaded successfully. Please try uploading videos again.');
       }
 
       // Redirect to project page
