@@ -120,14 +120,50 @@ async def process_video_background(request: ProcessVideoRequest, user_id: str):
         # Process transcripts - English is mandatory, then additional languages
         transcripts = []
         
+        # Normalize language codes to prevent duplicates
+        def normalize_language(lang: str) -> str:
+            """Normalize language codes to consistent format"""
+            lang_lower = lang.lower().strip()
+            
+            # Map various possible inputs to standardized short codes
+            lang_mapping = {
+                # English variants
+                'en': 'en', 'english': 'en', 'eng': 'en',
+                # Spanish variants  
+                'es': 'es', 'spanish': 'es', 'spa': 'es',
+                # Hindi variants
+                'hi': 'hi', 'hindi': 'hi', 'hin': 'hi',
+                # French variants
+                'fr': 'fr', 'french': 'fr', 'fra': 'fr',
+                # German variants
+                'de': 'de', 'german': 'de', 'ger': 'de', 'deu': 'de',
+                # Italian variants
+                'it': 'it', 'italian': 'it', 'ita': 'it',
+                # Portuguese variants
+                'pt': 'pt', 'portuguese': 'pt', 'por': 'pt',
+                # Russian variants
+                'ru': 'ru', 'russian': 'ru', 'rus': 'ru',
+                # Japanese variants
+                'ja': 'ja', 'japanese': 'ja', 'jpn': 'ja',
+                # Korean variants
+                'ko': 'ko', 'korean': 'ko', 'kor': 'ko',
+                # Chinese variants
+                'zh': 'zh', 'chinese': 'zh', 'chi': 'zh', 'zho': 'zh',
+                # Tamil variants
+                'ta': 'ta', 'tamil': 'ta', 'tam': 'ta'
+            }
+            
+            return lang_mapping.get(lang_lower, lang_lower)
+        
         # Ensure English is always processed first
-        languages_to_process = ["english"]
+        languages_to_process = ["en"]
         
         # Add additional languages if provided (avoid duplicates)
         if request.languages:
             for lang in request.languages:
-                if lang.lower() != "english" and lang not in languages_to_process:
-                    languages_to_process.append(lang)
+                normalized_lang = normalize_language(lang)
+                if normalized_lang != "en" and normalized_lang not in languages_to_process:
+                    languages_to_process.append(normalized_lang)
         
         for language in languages_to_process:
             try:
@@ -350,29 +386,13 @@ async def generate_srt_with_translation(result: Dict[str, Any], target_language:
         original_text = segment['text'].strip()
         
         # If target language is the same as detected language, no translation needed
-        if target_language == detected_language or target_language == 'en':
+        if target_language == 'en' or target_language == detected_language:
             translated_text = original_text
         else:
             # Translate the text to target language
             try:
-                # Map language codes to Google Translate codes
-                lang_map = {
-                    'en': 'en',   # English
-                    'es': 'es',   # Spanish
-                    'hi': 'hi',   # Hindi
-                    'fr': 'fr',   # French
-                    'de': 'de',   # German
-                    'it': 'it',   # Italian
-                    'pt': 'pt',   # Portuguese
-                    'ru': 'ru',   # Russian
-                    'ja': 'ja',   # Japanese
-                    'ko': 'ko',   # Korean
-                    'zh': 'zh',   # Chinese
-                    'ta': 'ta'    # Tamil
-                }
-
-                
-                target_lang_code = lang_map.get(target_language, target_language)
+                # Target language codes are already in Google Translate format (short codes)
+                target_lang_code = target_language
                 
                 translated_text = GoogleTranslator(source='auto', target=target_lang_code).translate(original_text)
                 

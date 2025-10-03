@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
+import { useState, useEffect, use, useRef } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 
@@ -49,6 +49,28 @@ const LANGUAGE_NAMES: { [key: string]: string } = {
     'ta': 'Tamil'
 };
 
+// Chat interfaces
+interface ChatMessage {
+    id: string;
+    type: 'user' | 'assistant' | 'system';
+    message: string;
+    sources?: Array<{
+        video_id?: string;
+        chunk_index?: number;
+        timestamp?: string;
+        content_preview?: string;
+        score?: number;
+    }>;
+    timestamp: Date;
+}
+
+interface ChatState {
+    messages: ChatMessage[];
+    isConnected: boolean;
+    isTyping: boolean;
+    connectionError?: string;
+}
+
 export default function ProjectDetail({ params }: { params: Promise<{ projectId: string }> }) {
     const resolvedParams = use(params);
     const [project, setProject] = useState<Project | null>(null);
@@ -60,6 +82,18 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
     const [selectedTranscriptLanguage, setSelectedTranscriptLanguage] = useState<{ [videoId: string]: string }>({});
     const [transcriptContents, setTranscriptContents] = useState<{ [txtUrl: string]: string }>({});
     const [loadingTranscripts, setLoadingTranscripts] = useState<Set<string>>(new Set());
+
+    // Chat state
+    const [chatState, setChatState] = useState<ChatState>({
+        messages: [],
+        isConnected: false,
+        isTyping: false
+    });
+    const [chatInput, setChatInput] = useState('');
+    const [isChatExpanded, setIsChatExpanded] = useState(false);
+    const wsRef = useRef<WebSocket | null>(null);
+    const chatMessagesRef = useRef<HTMLDivElement>(null);
+
     const router = useRouter();
 
     useEffect(() => {
@@ -278,6 +312,135 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
             });
         }
     };
+
+    // Chat functions
+    const connectToChat = () => {
+        if (wsRef.current || !project) return;
+
+        const wsUrl = `ws://localhost:8002/chat/${project.id}`;
+        console.log('Connecting to intelligence service:', wsUrl);
+
+        wsRef.current = new WebSocket(wsUrl);
+
+        wsRef.current.onopen = () => {
+            console.log('Connected to intelligence service');
+            setChatState(prev => ({ ...prev, isConnected: true, connectionError: undefined }));
+        };
+
+        wsRef.current.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            console.log('Received message:', data);
+
+            switch (data.type) {
+                case 'welcome':
+                    setChatState(prev => ({
+                        ...prev,
+                        messages: [...prev.messages, {
+                            id: Date.now().toString(),
+                            type: 'system',
+                            message: data.message,
+                            timestamp: new Date()
+                        }]
+                    }));
+                    break;
+
+                case 'typing':
+                    setChatState(prev => ({ ...prev, isTyping: true }));
+                    break;
+
+                case 'response':
+                    setChatState(prev => ({
+                        ...prev,
+                        isTyping: false,
+                        messages: [...prev.messages, {
+                            id: Date.now().toString(),
+                            type: 'assistant',
+                            message: data.message,
+                            sources: data.sources || [],
+                            timestamp: new Date()
+                        }]
+                    }));
+                    break;
+
+                case 'error':
+                    setChatState(prev => ({
+                        ...prev,
+                        isTyping: false,
+                        messages: [...prev.messages, {
+                            id: Date.now().toString(),
+                            type: 'system',
+                            message: `Error: ${data.message}`,
+                            timestamp: new Date()
+                        }]
+                    }));
+                    break;
+            }
+        };
+
+        wsRef.current.onclose = () => {
+            console.log('Disconnected from intelligence service');
+            setChatState(prev => ({ ...prev, isConnected: false }));
+            wsRef.current = null;
+        };
+
+        wsRef.current.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            setChatState(prev => ({
+                ...prev,
+                connectionError: 'Failed to connect to intelligence service. Make sure it\'s running on port 8002.'
+            }));
+        };
+    };
+
+    const disconnectFromChat = () => {
+        if (wsRef.current) {
+            wsRef.current.close();
+            wsRef.current = null;
+        }
+        setChatState(prev => ({ ...prev, isConnected: false }));
+    };
+
+    const sendChatMessage = () => {
+        if (!chatInput.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+        const userMessage: ChatMessage = {
+            id: Date.now().toString(),
+            type: 'user',
+            message: chatInput.trim(),
+            timestamp: new Date()
+        };
+
+        setChatState(prev => ({
+            ...prev,
+            messages: [...prev.messages, userMessage]
+        }));
+
+        wsRef.current.send(JSON.stringify({ message: chatInput.trim() }));
+        setChatInput('');
+    };
+
+    const handleChatKeyPress = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendChatMessage();
+        }
+    };
+
+    // Auto-scroll chat messages
+    useEffect(() => {
+        if (chatMessagesRef.current) {
+            chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+        }
+    }, [chatState.messages]);
+
+    // Cleanup WebSocket on unmount
+    useEffect(() => {
+        return () => {
+            if (wsRef.current) {
+                wsRef.current.close();
+            }
+        };
+    }, []);
 
     if (loading) {
         return (
@@ -567,6 +730,158 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                             </div>
                         </div>
                     )}
+
+                    {/* AI Chat Section */}
+                    <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                        <div
+                            className="flex items-center justify-between p-4 bg-gray-800 cursor-pointer hover:bg-gray-750 transition-colors"
+                            onClick={() => setIsChatExpanded(!isChatExpanded)}
+                        >
+                            <div className="flex items-center space-x-3">
+                                <div className="w-3 h-3 rounded-full bg-gradient-to-r from-blue-400 to-purple-500"></div>
+                                <h3 className="text-lg font-semibold">AI Assistant</h3>
+                                <span className="text-sm text-gray-400">
+                                    Ask questions about your video content
+                                </span>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                {chatState.connectionError && (
+                                    <span className="text-red-400 text-sm">Connection Error</span>
+                                )}
+                                {chatState.isConnected ? (
+                                    <div className="flex items-center space-x-2">
+                                        <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                                        <span className="text-green-400 text-sm">Connected</span>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center space-x-2">
+                                        <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
+                                        <span className="text-gray-400 text-sm">Disconnected</span>
+                                    </div>
+                                )}
+                                <svg
+                                    className={`w-5 h-5 text-gray-400 transition-transform ${isChatExpanded ? 'rotate-180' : ''}`}
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                            </div>
+                        </div>
+
+                        {isChatExpanded && (
+                            <div className="p-4">
+                                {/* Connection Controls */}
+                                <div className="flex items-center justify-between mb-4">
+                                    <p className="text-sm text-gray-400">
+                                        {chatState.isConnected
+                                            ? "Connected to AI assistant. Ask questions about your video transcripts!"
+                                            : "Connect to start chatting with AI about your video content."
+                                        }
+                                    </p>
+                                    {!chatState.isConnected ? (
+                                        <button
+                                            onClick={connectToChat}
+                                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm transition-colors"
+                                        >
+                                            Connect
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={disconnectFromChat}
+                                            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm transition-colors"
+                                        >
+                                            Disconnect
+                                        </button>
+                                    )}
+                                </div>
+
+                                {chatState.connectionError && (
+                                    <div className="mb-4 p-3 bg-red-900/20 border border-red-800 rounded-lg">
+                                        <p className="text-red-400 text-sm">{chatState.connectionError}</p>
+                                        <p className="text-gray-400 text-xs mt-1">
+                                            Make sure the intelligence service is running on port 8002
+                                        </p>
+                                    </div>
+                                )}
+
+                                {/* Chat Messages */}
+                                <div
+                                    ref={chatMessagesRef}
+                                    className="h-96 overflow-y-auto bg-gray-800 rounded-lg p-4 mb-4 space-y-4"
+                                >
+                                    {chatState.messages.length === 0 ? (
+                                        <div className="text-center text-gray-500 py-8">
+                                            <div className="text-4xl mb-2">🤖</div>
+                                            <p>No messages yet. Start a conversation!</p>
+                                        </div>
+                                    ) : (
+                                        chatState.messages.map((message) => (
+                                            <div key={message.id} className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                                <div className={`max-w-[80%] rounded-lg px-4 py-2 ${message.type === 'user'
+                                                        ? 'bg-blue-600 text-white'
+                                                        : message.type === 'system'
+                                                            ? 'bg-gray-700 text-gray-300'
+                                                            : 'bg-gray-700 text-white'
+                                                    }`}>
+                                                    <p className="whitespace-pre-wrap">{message.message}</p>
+                                                    {message.sources && message.sources.length > 0 && (
+                                                        <div className="mt-2 pt-2 border-t border-gray-600">
+                                                            <p className="text-xs text-gray-400 mb-1">Sources:</p>
+                                                            {message.sources.map((source, idx) => (
+                                                                <div key={idx} className="text-xs text-gray-300 mb-1">
+                                                                    <span className="font-medium">Video {source.video_id}</span>
+                                                                    {source.timestamp && (
+                                                                        <span className="text-gray-400"> at {source.timestamp}</span>
+                                                                    )}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    <p className="text-xs text-gray-400 mt-1">
+                                                        {message.timestamp.toLocaleTimeString()}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+
+                                    {chatState.isTyping && (
+                                        <div className="flex justify-start">
+                                            <div className="bg-gray-700 rounded-lg px-4 py-2">
+                                                <div className="flex space-x-1">
+                                                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                                                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                                                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Chat Input */}
+                                <div className="flex space-x-2">
+                                    <textarea
+                                        value={chatInput}
+                                        onChange={(e) => setChatInput(e.target.value)}
+                                        onKeyPress={handleChatKeyPress}
+                                        placeholder={chatState.isConnected ? "Ask about your video content..." : "Connect to start chatting"}
+                                        disabled={!chatState.isConnected}
+                                        className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white placeholder-gray-400 resize-none disabled:opacity-50 disabled:cursor-not-allowed focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                        rows={1}
+                                    />
+                                    <button
+                                        onClick={sendChatMessage}
+                                        disabled={!chatState.isConnected || !chatInput.trim()}
+                                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                                    >
+                                        Send
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
 
                     {/* Processing Status */}
                     {project.status === 'PROCESSING' && (

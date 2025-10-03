@@ -152,6 +152,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ proje
 
             // Delete transcript files from S3
             video.transcripts.forEach((transcript) => {
+                // Delete SRT file
                 deletePromises.push(
                     (async () => {
                         try {
@@ -169,12 +170,38 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ proje
                                 Key: s3Key,
                             });
                             await s3.send(deleteCommand);
-                            console.log(`Deleted S3 transcript: ${s3Key}`);
+                            console.log(`Deleted S3 SRT transcript: ${s3Key}`);
                         } catch (error) {
-                            console.error(`Failed to delete S3 transcript ${transcript.srtUrl}:`, error);
+                            console.error(`Failed to delete S3 SRT transcript ${transcript.srtUrl}:`, error);
                         }
                     })()
                 );
+
+                // Delete TXT file if it exists
+                if (transcript.txtUrl) {
+                    deletePromises.push(
+                        (async () => {
+                            try {
+                                // Extract S3 key from transcript txtUrl
+                                let s3Key = transcript.txtUrl;
+                                if (s3Key.startsWith('s3://')) {
+                                    // Extract key from s3://bucket-name/key format
+                                    const parts = s3Key.split('/');
+                                    s3Key = parts.slice(3).join('/'); // Remove s3://bucket-name/
+                                }
+
+                                const deleteCommand = new DeleteObjectCommand({
+                                    Bucket: process.env.AWS_S3_BUCKET!,
+                                    Key: s3Key,
+                                });
+                                await s3.send(deleteCommand);
+                                console.log(`Deleted S3 TXT transcript: ${s3Key}`);
+                            } catch (error) {
+                                console.error(`Failed to delete S3 TXT transcript ${transcript.txtUrl}:`, error);
+                            }
+                        })()
+                    );
+                }
             });
         });
 
