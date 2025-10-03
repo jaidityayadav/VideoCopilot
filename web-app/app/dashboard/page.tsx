@@ -26,7 +26,9 @@ export default function Dashboard() {
 
     const fetchProjects = async () => {
         try {
-            const response = await axios.get('/api/projects');
+            const response = await axios.get('/api/projects', {
+                withCredentials: true
+            });
 
             if (response.status !== 200) {
                 if (response.status === 401) {
@@ -47,7 +49,9 @@ export default function Dashboard() {
 
     const handleLogout = async () => {
         try {
-            await axios.post('/api/auth/logout');
+            await axios.post('/api/auth/logout', {}, {
+                withCredentials: true
+            });
             router.push('/login');
         } catch (error) {
             console.error('Logout failed:', error);
@@ -66,7 +70,9 @@ export default function Dashboard() {
         setDeletingProjects(prev => new Set(prev).add(projectId));
 
         try {
-            const response = await axios.delete(`/api/projects/${projectId}`);
+            const response = await axios.delete(`/api/projects/${projectId}`, {
+                withCredentials: true
+            });
 
             if (response.status !== 200) {
                 const errorData = response.data;

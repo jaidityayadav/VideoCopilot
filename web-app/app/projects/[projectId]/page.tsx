@@ -4,14 +4,24 @@ import { useState, useEffect, use } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 
+interface Transcript {
+    id: string;
+    language: string;
+    srtUrl: string;
+    createdAt: string;
+}
+
 interface Video {
     id: string;
     s3Key: string;
+    transcripts?: Transcript[];
 }
 
 interface VideoWithSignedUrl extends Video {
     signedUrl?: string;
-}interface Project {
+}
+
+interface Project {
     id: string;
     name: string;
     thumbnail?: string;
@@ -22,6 +32,21 @@ interface VideoWithSignedUrl extends Video {
         videos: number;
     };
 }
+
+const LANGUAGE_NAMES: { [key: string]: string } = {
+    'en': 'English',
+    'es': 'Spanish',
+    'hi': 'Hindi',
+    'fr': 'French',
+    'de': 'German',
+    'it': 'Italian',
+    'pt': 'Portuguese',
+    'ru': 'Russian',
+    'ja': 'Japanese',
+    'ko': 'Korean',
+    'zh': 'Chinese',
+    'ta': 'Tamil'
+};
 
 export default function ProjectDetail({ params }: { params: Promise<{ projectId: string }> }) {
     const resolvedParams = use(params);
@@ -35,30 +60,55 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
 
     useEffect(() => {
         fetchProject();
-    }, [resolvedParams.projectId]);
+
+        // Auto-refresh if project is still processing
+        const interval = setInterval(() => {
+            if (project?.status === 'PROCESSING') {
+                fetchProject();
+            }
+        }, 10000); // Refresh every 10 seconds
+
+        return () => clearInterval(interval);
+    }, [resolvedParams.projectId, project?.status]);
 
     const fetchSignedUrl = async (s3Key: string, videoId: string): Promise<string> => {
         try {
+            console.log('Fetching signed URL for:', { s3Key, videoId });
+
             const response = await axios.post('/api/signed-url', {
                 key: s3Key,
                 videoId
+            }, {
+                withCredentials: true
             });
 
+            console.log('Signed URL response:', response.status, response.data);
+
             if (response.status !== 200) {
-                throw new Error('Failed to get signed URL');
+                throw new Error(`Failed to get signed URL: ${response.status}`);
             }
 
             const { signedUrl } = response.data;
+            if (!signedUrl) {
+                throw new Error('No signed URL in response');
+            }
+
             return signedUrl;
         } catch (error) {
-            console.error('Error fetching signed URL:', error);
+            console.error('Error fetching signed URL for key', s3Key, ':', error);
+            if (axios.isAxiosError(error)) {
+                console.error('Response data:', error.response?.data);
+                console.error('Response status:', error.response?.status);
+            }
             return '';
         }
     };
 
     const fetchProject = async () => {
         try {
-            const response = await axios.get(`/api/projects/${resolvedParams.projectId}`);
+            const response = await axios.get(`/api/projects/${resolvedParams.projectId}`, {
+                withCredentials: true
+            });
 
             if (response.status !== 200) {
                 if (response.status === 404) {
@@ -104,7 +154,9 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
         setDeleting(true);
 
         try {
-            const response = await axios.delete(`/api/projects/${project.id}`);
+            const response = await axios.delete(`/api/projects/${project.id}`, {
+                withCredentials: true
+            });
 
             if (response.status !== 200) {
                 const errorData = response.data;
@@ -133,7 +185,9 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
         setDeletingVideos(prev => new Set(prev).add(videoId));
 
         try {
-            const response = await axios.delete(`/api/projects/${project?.id}/videos/${videoId}`);
+            const response = await axios.delete(`/api/projects/${project?.id}/videos/${videoId}`, {
+                withCredentials: true
+            });
 
             if (response.status !== 200) {
                 const errorData = response.data;
@@ -286,7 +340,19 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                                                     className="w-full h-full object-cover"
                                                     controls
                                                     preload="metadata"
+                                                    onError={(e) => {
+                                                        console.error('Video failed to load:', video.signedUrl);
+                                                        console.error('Video error:', e);
+                                                    }}
+                                                    onLoadStart={() => console.log('Video load started:', video.signedUrl)}
+                                                    onLoadedData={() => console.log('Video loaded successfully:', video.signedUrl)}
                                                 />
+                                            ) : video.signedUrl === '' ? (
+                                                <div className="text-center">
+                                                    <div className="text-3xl mb-2">❌</div>
+                                                    <p className="text-sm text-red-400">Failed to load video</p>
+                                                    <p className="text-xs text-gray-500 mt-1">Check console for details</p>
+                                                </div>
                                             ) : (
                                                 <div className="text-center">
                                                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-2"></div>
@@ -310,12 +376,18 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                                         </div>
                                         <div className="p-4">
                                             <h3 className="font-semibold mb-2">Video {index + 1}</h3>
+                                            <div className="text-xs text-gray-500 mb-2">
+                                                S3 Key: {video.s3Key}
+                                            </div>
                                             <div className="flex items-center justify-between text-sm text-gray-400">
                                                 <span>
-                                                    Video ready
+                                                    {video.signedUrl ? 'Video ready' : video.signedUrl === '' ? 'Load failed' : 'Loading...'}
                                                 </span>
-                                                <button className="text-blue-400 hover:text-blue-300 transition">
-                                                    View Details
+                                                <button
+                                                    onClick={() => console.log('Video details:', video)}
+                                                    className="text-blue-400 hover:text-blue-300 transition"
+                                                >
+                                                    Debug Info
                                                 </button>
                                             </div>
                                         </div>
@@ -343,6 +415,63 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                         )}
                     </div>
 
+                    {/* Transcripts Section */}
+                    {videosWithUrls.some(video => video.transcripts && video.transcripts.length > 0) && (
+                        <div>
+                            <h2 className="text-2xl font-bold mb-6">Generated Transcripts</h2>
+                            <div className="space-y-6">
+                                {videosWithUrls.map((video, videoIndex) => {
+                                    if (!video.transcripts || video.transcripts.length === 0) return null;
+
+                                    return (
+                                        <div key={video.id} className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                                            <h3 className="text-lg font-semibold mb-4">Video {videoIndex + 1} Transcripts</h3>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                                {video.transcripts.map((transcript) => (
+                                                    <div key={transcript.id} className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                                                        <div className="flex items-center justify-between mb-3">
+                                                            <div className="flex items-center space-x-2">
+                                                                <span className="text-2xl">🌐</span>
+                                                                <span className="font-medium">
+                                                                    {LANGUAGE_NAMES[transcript.language] || transcript.language}
+                                                                </span>
+                                                            </div>
+                                                            <span className="text-xs text-gray-400">
+                                                                {new Date(transcript.createdAt).toLocaleDateString()}
+                                                            </span>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => window.open(transcript.srtUrl, '_blank')}
+                                                            className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition"
+                                                        >
+                                                            Download SRT
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Processing Status */}
+                    {project.status === 'PROCESSING' && (
+                        <div className="bg-yellow-900/20 border border-yellow-800 rounded-xl p-6">
+                            <div className="flex items-center space-x-3 mb-4">
+                                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-yellow-500"></div>
+                                <h3 className="text-lg font-semibold text-yellow-400">Processing Videos</h3>
+                            </div>
+                            <p className="text-gray-300 mb-4">
+                                We're generating transcripts for your videos in multiple languages. This may take a few minutes depending on video length.
+                            </p>
+                            <div className="text-sm text-gray-400">
+                                This page will automatically refresh to show progress.
+                            </div>
+                        </div>
+                    )}
+
                     {/* Analysis Section */}
                     {project.status === 'COMPLETED' && (
                         <div>
@@ -359,22 +488,22 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                                 </div>
 
                                 <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                                    <h3 className="font-semibold mb-4">📝 Transcripts</h3>
-                                    <p className="text-gray-400 text-sm">
-                                        Access automatically generated transcripts with timestamps and speaker identification.
-                                    </p>
-                                    <button className="mt-4 text-blue-400 hover:text-blue-300 transition text-sm">
-                                        View Transcripts →
-                                    </button>
-                                </div>
-
-                                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
                                     <h3 className="font-semibold mb-4">🎯 Key Moments</h3>
                                     <p className="text-gray-400 text-sm">
                                         Discover the most important moments and highlights from your video content.
                                     </p>
                                     <button className="mt-4 text-blue-400 hover:text-blue-300 transition text-sm">
                                         Explore Moments →
+                                    </button>
+                                </div>
+
+                                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                                    <h3 className="font-semibold mb-4">🔍 Search & Discovery</h3>
+                                    <p className="text-gray-400 text-sm">
+                                        Search through your video content using our intelligent transcript search.
+                                    </p>
+                                    <button className="mt-4 text-blue-400 hover:text-blue-300 transition text-sm">
+                                        Search Content →
                                     </button>
                                 </div>
                             </div>

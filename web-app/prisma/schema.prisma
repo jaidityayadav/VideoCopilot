@@ -1,0 +1,70 @@
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+model User {
+    id        String    @id @default(cuid())
+    name      String    @unique
+    email     String    @unique
+    password  String
+    createdAt DateTime  @default(now())
+    projects  Project[]
+}
+
+model Project {
+    id              String     @id @default(cuid())
+    name            String
+    thumbnail       String? // Optional project thumbnail
+    totalVideos     Int        @default(0)
+    processedVideos Int        @default(0)
+    status          Status     @default(PENDING)
+    createdAt       DateTime   @default(now())
+    ownerId         String
+    owner           User       @relation(fields: [ownerId], references: [id])
+    videos          Video[]
+    embeddings      Embedding?
+}
+
+model Video {
+    id          String       @id @default(cuid())
+    s3Key       String // Store S3 key
+    status      VideoStatus  @default(PENDING)
+    createdAt   DateTime     @default(now())
+    projectId   String
+    project     Project      @relation(fields: [projectId], references: [id])
+    transcripts Transcript[]
+}
+
+model Transcript {
+    id        String   @id @default(cuid())
+    language  String // e.g. "en", "es", "fr"
+    srtUrl    String // S3 URL of transcript file
+    videoId   String
+    video     Video    @relation(fields: [videoId], references: [id])
+    createdAt DateTime @default(now())
+}
+
+model Embedding {
+    id         String   @id @default(cuid())
+    pineconeId String   @unique
+    createdAt  DateTime @default(now())
+    projectId  String   @unique
+    project    Project  @relation(fields: [projectId], references: [id])
+}
+
+enum Status {
+    PENDING
+    PROCESSING
+    COMPLETED
+}
+
+enum VideoStatus {
+    PENDING
+    PROCESSING
+    DONE
+}

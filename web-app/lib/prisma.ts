@@ -1,4 +1,4 @@
-import { PrismaClient } from '@videocopilot/common';
+import { PrismaClient } from '@prisma/client';
 
 declare global {
     var prisma: PrismaClient | undefined;

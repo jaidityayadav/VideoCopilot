@@ -12,9 +12,25 @@ interface UploadedVideo {
   error?: string;
 }
 
+const SUPPORTED_LANGUAGES = {
+  'en': 'English',
+  'es': 'Spanish',
+  'hi': 'Hindi',
+  'fr': 'French',
+  'de': 'German',
+  'it': 'Italian',
+  'pt': 'Portuguese',
+  'ru': 'Russian',
+  'ja': 'Japanese',
+  'ko': 'Korean',
+  'zh': 'Chinese',
+  'ta': 'Tamil'
+};
+
 export default function CreateProject() {
   const [projectName, setProjectName] = useState("");
   const [videos, setVideos] = useState<UploadedVideo[]>([]);
+  const [selectedLanguages, setSelectedLanguages] = useState<string[]>(['en']); // Default to English
   const [isUploading, setIsUploading] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -57,9 +73,8 @@ export default function CreateProject() {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
-    });
-
-    if (uploadResponse.status !== 200) {
+      withCredentials: true
+    }); if (uploadResponse.status !== 200) {
       const errorData = uploadResponse.data;
       throw new Error(errorData.error || 'Failed to upload file');
     }
@@ -137,6 +152,21 @@ export default function CreateProject() {
     setVideos(prev => prev.filter((_, i) => i !== index));
   };
 
+  // Handle language selection
+  const handleLanguageChange = (languageCode: string, checked: boolean) => {
+    setSelectedLanguages(prev => {
+      if (checked) {
+        return [...prev, languageCode];
+      } else {
+        // Don't allow removing the last language
+        if (prev.length <= 1) {
+          return prev;
+        }
+        return prev.filter(lang => lang !== languageCode);
+      }
+    });
+  };
+
   // Create project first, then handle video uploads
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -148,6 +178,11 @@ export default function CreateProject() {
 
     if (videos.length === 0) {
       alert('Please add at least one video');
+      return;
+    }
+
+    if (selectedLanguages.length === 0) {
+      alert('Please select at least one language for transcripts');
       return;
     }
 
@@ -163,9 +198,9 @@ export default function CreateProject() {
       // Create project first
       const projectResponse = await axios.post('/api/projects', {
         name: projectName.trim()
-      });
-
-      if (projectResponse.status !== 200 && projectResponse.status !== 201) {
+      }, {
+        withCredentials: true
+      }); if (projectResponse.status !== 200 && projectResponse.status !== 201) {
         const errorData = projectResponse.data;
         throw new Error(errorData.error || 'Failed to create project');
       }
@@ -185,9 +220,9 @@ export default function CreateProject() {
             // Add video to project in database
             await axios.post(`/api/projects/${project.id}/videos`, {
               s3Key: s3Key
-            });
-
-            successfulUploads.push({ ...videoData, s3Key });
+            }, {
+              withCredentials: true
+            }); successfulUploads.push({ ...videoData, s3Key });
           } catch (error) {
             console.error('Error uploading video:', videoData.file.name, error);
             // Continue with other videos
@@ -200,7 +235,48 @@ export default function CreateProject() {
       if (videoWithThumbnail) {
         await axios.put(`/api/projects/${project.id}`, {
           thumbnail: videoWithThumbnail.thumbnail
+        }, {
+          withCredentials: true
         });
+      }
+
+      // Start video processing for each uploaded video
+      let processingStarted = 0;
+      for (const uploadedVideo of successfulUploads) {
+        try {
+          // Find the corresponding video ID from the database
+          const videoResponse = await axios.get(`/api/projects/${project.id}`, {
+            withCredentials: true
+          });
+          const projectData = videoResponse.data.project;
+          const videoRecord = projectData.videos.find((v: any) => v.s3Key === uploadedVideo.s3Key);
+
+          if (videoRecord) {
+            // Trigger video processing with selected languages
+            const processingResponse = await axios.post('/api/process-video', {
+              video_s3_url: uploadedVideo.s3Key,
+              project_id: project.id,
+              video_id: videoRecord.id,
+              languages: selectedLanguages
+            }, {
+              withCredentials: true
+            });
+
+            if (processingResponse.status === 200) {
+              processingStarted++;
+            }
+          }
+        } catch (error) {
+          console.error('Error starting video processing:', error);
+          // Continue with other videos even if one fails
+        }
+      }
+
+      // Show user feedback about processing
+      if (processingStarted > 0) {
+        alert(`Project created successfully! Processing started for ${processingStarted} video${processingStarted !== 1 ? 's' : ''} in ${selectedLanguages.length} language${selectedLanguages.length !== 1 ? 's' : ''}. You can monitor progress on the project page.`);
+      } else if (successfulUploads.length > 0) {
+        alert('Project created successfully, but video processing could not be started. You can try again from the project page.');
       }
 
       // Redirect to project page
@@ -254,6 +330,35 @@ export default function CreateProject() {
               className="w-full px-4 py-3 rounded-lg bg-gray-800 border border-gray-700 text-gray-100 focus:outline-none focus:border-blue-500 text-lg"
               placeholder="e.g., JavaScript Mastery Course"
             />
+          </div>
+
+          {/* Language Selection */}
+          <div>
+            <label className="block text-gray-300 mb-3 text-lg font-semibold">
+              Select Languages for Transcripts
+            </label>
+            <p className="text-gray-400 text-sm mb-4">
+              Choose which languages you want transcripts generated in. We'll automatically detect the video's language and translate if needed.
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {Object.entries(SUPPORTED_LANGUAGES).map(([code, name]) => (
+                <label key={code} className="flex items-center space-x-3 p-3 bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selectedLanguages.includes(code)}
+                    onChange={(e) => handleLanguageChange(code, e.target.checked)}
+                    className="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500 focus:ring-2"
+                  />
+                  <span className="text-sm font-medium">{name}</span>
+                </label>
+              ))}
+            </div>
+            {selectedLanguages.length === 0 && (
+              <p className="text-red-400 text-sm mt-2">Please select at least one language</p>
+            )}
+            <div className="mt-3 text-sm text-gray-400">
+              Selected: {selectedLanguages.map(code => SUPPORTED_LANGUAGES[code as keyof typeof SUPPORTED_LANGUAGES]).join(', ')}
+            </div>
           </div>
 
           {/* Video Upload Area */}
@@ -380,7 +485,8 @@ export default function CreateProject() {
               isCreating ||
               videos.some(v => v.uploading) ||
               videos.filter(v => !v.error && !v.uploading).length === 0 ||
-              !projectName.trim()
+              !projectName.trim() ||
+              selectedLanguages.length === 0
             }
             className="w-full bg-blue-600 text-white py-4 rounded-lg font-semibold text-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-3"
           >
@@ -396,8 +502,8 @@ export default function CreateProject() {
               </>
             ) : (
               <>
-                <span>Create Project & Upload Videos</span>
-                <span>({videos.filter(v => !v.error && !v.uploading).length} video{videos.filter(v => !v.error && !v.uploading).length !== 1 ? 's' : ''})</span>
+                <span>Create Project & Start Processing</span>
+                <span>({videos.filter(v => !v.error && !v.uploading).length} video{videos.filter(v => !v.error && !v.uploading).length !== 1 ? 's' : ''}, {selectedLanguages.length} language{selectedLanguages.length !== 1 ? 's' : ''})</span>
               </>
             )}
           </button>
