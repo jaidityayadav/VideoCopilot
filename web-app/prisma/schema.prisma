@@ -44,6 +44,7 @@ model Transcript {
     id        String   @id @default(cuid())
     language  String // e.g. "en", "es", "fr"
     srtUrl    String // S3 URL of transcript file
+    txtUrl    String // S3 url of txt file
     videoId   String
     video     Video    @relation(fields: [videoId], references: [id])
     createdAt DateTime @default(now())

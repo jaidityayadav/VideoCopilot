@@ -8,6 +8,7 @@ interface Transcript {
     id: string;
     language: string;
     srtUrl: string;
+    txtUrl: string;
     createdAt: string;
 }
 
@@ -56,6 +57,9 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
     const [deleting, setDeleting] = useState(false);
     const [deletingVideos, setDeletingVideos] = useState<Set<string>>(new Set());
     const [error, setError] = useState<string | null>(null);
+    const [selectedTranscriptLanguage, setSelectedTranscriptLanguage] = useState<{ [videoId: string]: string }>({});
+    const [transcriptContents, setTranscriptContents] = useState<{ [txtUrl: string]: string }>({});
+    const [loadingTranscripts, setLoadingTranscripts] = useState<Set<string>>(new Set());
     const router = useRouter();
 
     useEffect(() => {
@@ -102,6 +106,64 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
             }
             return '';
         }
+    };
+
+    const fetchTranscriptContent = async (txtUrl: string, videoId: string): Promise<string> => {
+        try {
+            if (transcriptContents[txtUrl]) {
+                return transcriptContents[txtUrl];
+            }
+
+            setLoadingTranscripts(prev => new Set(prev).add(txtUrl));
+
+            console.log('Fetching transcript content for txtUrl:', txtUrl, 'Video ID:', videoId);
+
+            // Use our server-side proxy endpoint to fetch transcript content
+            const response = await axios.post('/api/transcript-content', {
+                txtUrl: txtUrl,
+                videoId: videoId
+            }, {
+                withCredentials: true
+            });
+
+            if (response.status !== 200) {
+                throw new Error(`Failed to fetch transcript content: ${response.status}`);
+            }
+
+            const { content, success } = response.data;
+            if (!success || !content) {
+                throw new Error('Invalid response from transcript API');
+            }
+
+            console.log('Successfully fetched transcript content, length:', content.length);
+            console.log('Content preview (first 200 chars):', content.substring(0, 200));
+
+            setTranscriptContents(prev => {
+                const newState = { ...prev, [txtUrl]: content };
+                console.log('Updated transcript contents state:', Object.keys(newState));
+                return newState;
+            });
+            return content;
+        } catch (error) {
+            console.error('Error fetching transcript content:', error);
+            console.error('txtUrl:', txtUrl, 'videoId:', videoId);
+
+            // Set error message in transcripts
+            const errorMessage = `Failed to load transcript: ${error instanceof Error ? error.message : 'Unknown error'}`;
+            setTranscriptContents(prev => ({ ...prev, [txtUrl]: errorMessage }));
+            return errorMessage;
+        } finally {
+            setLoadingTranscripts(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(txtUrl);
+                return newSet;
+            });
+        }
+    };
+
+    const handleLanguageSelect = async (videoId: string, language: string, txtUrl: string) => {
+        setSelectedTranscriptLanguage(prev => ({ ...prev, [videoId]: language }));
+        await fetchTranscriptContent(txtUrl, videoId);
     };
 
     const fetchProject = async () => {
@@ -423,32 +485,82 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                                 {videosWithUrls.map((video, videoIndex) => {
                                     if (!video.transcripts || video.transcripts.length === 0) return null;
 
+                                    const selectedLanguage = selectedTranscriptLanguage[video.id];
+                                    const selectedTranscript = selectedLanguage
+                                        ? video.transcripts.find(t => t.language === selectedLanguage)
+                                        : video.transcripts[0]; // Default to first transcript
+
                                     return (
                                         <div key={video.id} className="bg-gray-900 rounded-xl border border-gray-800 p-6">
                                             <h3 className="text-lg font-semibold mb-4">Video {videoIndex + 1} Transcripts</h3>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                                {video.transcripts.map((transcript) => (
-                                                    <div key={transcript.id} className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-                                                        <div className="flex items-center justify-between mb-3">
-                                                            <div className="flex items-center space-x-2">
-                                                                <span className="text-2xl">🌐</span>
-                                                                <span className="font-medium">
-                                                                    {LANGUAGE_NAMES[transcript.language] || transcript.language}
-                                                                </span>
-                                                            </div>
-                                                            <span className="text-xs text-gray-400">
-                                                                {new Date(transcript.createdAt).toLocaleDateString()}
+
+                                            {/* Language Selector */}
+                                            <div className="mb-6">
+                                                <label htmlFor={`language-${video.id}`} className="block text-sm font-medium text-gray-300 mb-2">
+                                                    Select Language:
+                                                </label>
+                                                <select
+                                                    id={`language-${video.id}`}
+                                                    value={selectedLanguage || video.transcripts[0]?.language}
+                                                    onChange={(e) => {
+                                                        const selectedLang = e.target.value;
+                                                        const transcript = video.transcripts?.find(t => t.language === selectedLang);
+                                                        if (transcript) {
+                                                            handleLanguageSelect(video.id, selectedLang, transcript.txtUrl);
+                                                        }
+                                                    }}
+                                                    className="w-full md:w-auto px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                >
+                                                    {video.transcripts.map((transcript) => (
+                                                        <option key={transcript.id} value={transcript.language}>
+                                                            {LANGUAGE_NAMES[transcript.language] || transcript.language}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {/* Transcript Content */}
+                                            {selectedTranscript && (
+                                                <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                                                    <div className="flex items-center justify-between mb-4">
+                                                        <div className="flex items-center space-x-2">
+                                                            <span className="text-xl">📝</span>
+                                                            <span className="font-medium">
+                                                                {LANGUAGE_NAMES[selectedTranscript.language] || selectedTranscript.language} Transcript
                                                             </span>
                                                         </div>
-                                                        <button
-                                                            onClick={() => window.open(transcript.srtUrl, '_blank')}
-                                                            className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition"
-                                                        >
-                                                            Download SRT
-                                                        </button>
+                                                        <span className="text-xs text-gray-400">
+                                                            {new Date(selectedTranscript.createdAt).toLocaleDateString()}
+                                                        </span>
                                                     </div>
-                                                ))}
-                                            </div>
+
+                                                    {loadingTranscripts.has(selectedTranscript.txtUrl) ? (
+                                                        <div className="flex items-center justify-center py-8">
+                                                            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500 mr-3"></div>
+                                                            <span className="text-gray-400">Loading transcript...</span>
+                                                        </div>
+                                                    ) : transcriptContents[selectedTranscript.txtUrl] ? (
+                                                        <div className="max-h-96 overflow-y-auto">
+                                                            <p className="text-gray-300 leading-relaxed whitespace-pre-wrap">
+                                                                {(() => {
+                                                                    const content = transcriptContents[selectedTranscript.txtUrl];
+                                                                    console.log('Rendering transcript content for:', selectedTranscript.txtUrl, 'Content length:', content?.length);
+                                                                    return content;
+                                                                })()}
+                                                            </p>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="text-center py-6">
+                                                            <button
+                                                                onClick={() => fetchTranscriptContent(selectedTranscript.txtUrl, video.id)}
+                                                                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition"
+                                                            >
+                                                                Load Transcript
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     );
                                 })}
@@ -468,44 +580,6 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                             </p>
                             <div className="text-sm text-gray-400">
                                 This page will automatically refresh to show progress.
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Analysis Section */}
-                    {project.status === 'COMPLETED' && (
-                        <div>
-                            <h2 className="text-2xl font-bold mb-6">Analysis & Insights</h2>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                                    <h3 className="font-semibold mb-4">📊 Video Analytics</h3>
-                                    <p className="text-gray-400 text-sm">
-                                        View detailed analytics about your video content, engagement patterns, and key insights.
-                                    </p>
-                                    <button className="mt-4 text-blue-400 hover:text-blue-300 transition text-sm">
-                                        View Analytics →
-                                    </button>
-                                </div>
-
-                                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                                    <h3 className="font-semibold mb-4">🎯 Key Moments</h3>
-                                    <p className="text-gray-400 text-sm">
-                                        Discover the most important moments and highlights from your video content.
-                                    </p>
-                                    <button className="mt-4 text-blue-400 hover:text-blue-300 transition text-sm">
-                                        Explore Moments →
-                                    </button>
-                                </div>
-
-                                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                                    <h3 className="font-semibold mb-4">🔍 Search & Discovery</h3>
-                                    <p className="text-gray-400 text-sm">
-                                        Search through your video content using our intelligent transcript search.
-                                    </p>
-                                    <button className="mt-4 text-blue-400 hover:text-blue-300 transition text-sm">
-                                        Search Content →
-                                    </button>
-                                </div>
                             </div>
                         </div>
                     )}

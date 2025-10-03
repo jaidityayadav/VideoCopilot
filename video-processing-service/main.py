@@ -1,6 +1,7 @@
 import os
 import tempfile
 import asyncio
+import re
 from typing import List, Dict, Any
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -114,9 +115,19 @@ async def process_video_background(request: ProcessVideoRequest, user_id: str):
         # Download video from S3
         video_file_path = await download_video_from_s3(request.video_s3_url)
         
-        # Process transcripts for each language
+        # Process transcripts - English is mandatory, then additional languages
         transcripts = []
-        for language in request.languages:
+        
+        # Ensure English is always processed first
+        languages_to_process = ["english"]
+        
+        # Add additional languages if provided (avoid duplicates)
+        if request.languages:
+            for lang in request.languages:
+                if lang.lower() != "english" and lang not in languages_to_process:
+                    languages_to_process.append(lang)
+        
+        for language in languages_to_process:
             try:
                 transcript_data = await process_transcript(
                     video_file_path, 
@@ -267,33 +278,59 @@ async def process_transcript(video_path: str, language: str, user_id: str, proje
         s3_key = f"{user_id}/{project_id}/transcripts/{srt_filename}"
         bucket_name = os.getenv('S3_BUCKET_NAME', 'vidwise')
         
+        # Upload SRT to S3
         s3_client.upload_file(srt_path, bucket_name, s3_key)
         srt_url = f"s3://{bucket_name}/{s3_key}"
         
-        # Save transcript record to database
-        await prisma.transcript.create(
+        # Generate TXT content from SRT
+        txt_content = convert_srt_to_plain_text(srt_content)
+        if not txt_content.strip():
+            raise Exception("Failed to extract text content from SRT")
+        
+        # Create and upload TXT file
+        txt_filename = f"{video_id}_{language}.txt"
+        txt_path = os.path.join(tempfile.gettempdir(), txt_filename)
+        
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write(txt_content)
+        
+        # Upload TXT to S3
+        txt_s3_key = f"{user_id}/{project_id}/transcripts/{txt_filename}"
+        s3_client.upload_file(txt_path, bucket_name, txt_s3_key)
+        txt_url = f"s3://{bucket_name}/{txt_s3_key}"
+        
+        # Save transcript record to database with both URLs
+        transcript_record = await prisma.transcript.create(
             data={
                 "language": language,
                 "srtUrl": srt_url,
+                "txtUrl": txt_url,
                 "videoId": video_id
             }
         )
+        
+        print(f"📄 Generated SRT: {srt_url}")
+        print(f"📄 Generated TXT: {txt_url}")
         
         # Clean up temporary files
         if audio_path and os.path.exists(audio_path):
             os.unlink(audio_path)
         if srt_path and os.path.exists(srt_path):
             os.unlink(srt_path)
+        if txt_path and os.path.exists(txt_path):
+            os.unlink(txt_path)
         
         return TranscriptResponse(language=language, srt_url=srt_url)
         
     except Exception as e:
         print(f"Error in process_transcript: {str(e)}")
         # Clean up any temporary files on error
-        if audio_path and os.path.exists(audio_path):
+        if 'audio_path' in locals() and audio_path and os.path.exists(audio_path):
             os.unlink(audio_path)
-        if srt_path and os.path.exists(srt_path):
+        if 'srt_path' in locals() and srt_path and os.path.exists(srt_path):
             os.unlink(srt_path)
+        if 'txt_path' in locals() and txt_path and os.path.exists(txt_path):
+            os.unlink(txt_path)
         raise Exception(f"Failed to process transcript for {language}: {str(e)}")
 
 async def generate_srt_with_translation(result: Dict[str, Any], target_language: str) -> str:
@@ -381,6 +418,118 @@ async def check_and_update_project_status(project_id: str):
                 "processedVideos": len(videos)
             }
         )
+
+async def convert_srt_to_txt_and_upload(transcript_id: str, srt_content: str, user_id: str, project_id: str, video_id: str, language: str) -> str:
+    """
+    Convert SRT content to plain text (removing timestamps), upload to S3, and update database
+    
+    Args:
+        transcript_id: ID of the transcript record to update
+        srt_content: The SRT file content
+        user_id: User ID for S3 path
+        project_id: Project ID for S3 path  
+        video_id: Video ID for S3 path
+        language: Language code for filename
+        
+    Returns:
+        S3 URL of the uploaded TXT file
+    """
+    try:
+        print(f"🔄 Converting SRT to TXT for transcript {transcript_id} ({language})")
+        
+        # Parse SRT content and extract text only
+        txt_content = convert_srt_to_plain_text(srt_content)
+        
+        if not txt_content.strip():
+            raise ValueError("No text content extracted from SRT")
+        
+        # Generate S3 key for TXT file
+        txt_s3_key = f"{user_id}/{project_id}/transcripts/{video_id}/{language}.txt"
+        
+        # Upload TXT content to S3
+        s3_client.put_object(
+            Bucket=os.getenv('S3_BUCKET_NAME'),
+            Key=txt_s3_key,
+            Body=txt_content.encode('utf-8'),
+            ContentType='text/plain',
+            Metadata={
+                'user_id': user_id,
+                'project_id': project_id,
+                'video_id': video_id,
+                'language': language,
+                'content_type': 'transcript_txt'
+            }
+        )
+        
+        # Generate S3 URL
+        txt_s3_url = f"s3://{os.getenv('S3_BUCKET_NAME')}/{txt_s3_key}"
+        
+        # Update transcript record with TXT URL
+        await prisma.transcript.update(
+            where={"id": transcript_id},
+            data={"txtUrl": txt_s3_url}
+        )
+        
+        print(f"✅ Successfully converted and uploaded TXT file: {txt_s3_url}")
+        return txt_s3_url
+        
+    except Exception as e:
+        print(f"❌ Error converting SRT to TXT: {str(e)}")
+        raise e
+
+def convert_srt_to_plain_text(srt_content: str) -> str:
+    """
+    Convert SRT subtitle content to plain text by removing timestamps and formatting
+    
+    Args:
+        srt_content: Raw SRT file content
+        
+    Returns:
+        Plain text content without timestamps
+    """
+    # Split content into subtitle blocks
+    blocks = re.split(r'\n\s*\n', srt_content.strip())
+    
+    text_lines = []
+    
+    for block in blocks:
+        if not block.strip():
+            continue
+            
+        lines = block.strip().split('\n')
+        
+        # Skip if block doesn't have enough lines (should have: number, timestamp, text)
+        if len(lines) < 3:
+            continue
+            
+        # First line should be subtitle number
+        if not lines[0].strip().isdigit():
+            continue
+            
+        # Second line should be timestamp (contains -->)
+        if '-->' not in lines[1]:
+            continue
+            
+        # Everything from third line onwards is subtitle text
+        subtitle_text = '\n'.join(lines[2:]).strip()
+        
+        if subtitle_text:
+            # Clean up common SRT formatting
+            subtitle_text = re.sub(r'<[^>]+>', '', subtitle_text)  # Remove HTML tags
+            subtitle_text = re.sub(r'\{[^}]+\}', '', subtitle_text)  # Remove formatting tags
+            subtitle_text = subtitle_text.replace('&nbsp;', ' ')  # Replace non-breaking spaces
+            subtitle_text = re.sub(r'\s+', ' ', subtitle_text)  # Normalize whitespace
+            
+            text_lines.append(subtitle_text.strip())
+    
+    # Join all text with proper spacing
+    full_text = ' '.join(text_lines)
+    
+    # Final cleanup
+    full_text = re.sub(r'\s+', ' ', full_text)  # Normalize whitespace
+    full_text = full_text.strip()
+    
+    return full_text
 
 if __name__ == "__main__":
     import uvicorn
