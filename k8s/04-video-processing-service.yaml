@@ -113,8 +113,6 @@ spec:
             configMapKeyRef:
               name: videocopilot-config
               key: chunk-overlap
-        - name: EMBEDDING_SERVICE_URL
-          value: "http://embedding-service:8001"
         volumeMounts:
         - name: uploads-storage
           mountPath: /app/uploads
@@ -127,7 +125,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /health
-            port: 8002
+            port: 8000
           initialDelaySeconds: 120
           periodSeconds: 60
           timeoutSeconds: 30
@@ -135,7 +133,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /health
-            port: 8002
+            port: 8000
           initialDelaySeconds: 60
           periodSeconds: 30
           timeoutSeconds: 10
@@ -175,7 +173,7 @@ spec:
   selector:
     app: video-processing-service
   ports:
-  - port: 8002
+  - port: 8000
     targetPort: 8000
     protocol: TCP
     name: http

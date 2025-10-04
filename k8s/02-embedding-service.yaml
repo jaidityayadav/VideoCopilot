@@ -86,7 +86,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /health
-            port: 8000
+            port: 8001
           initialDelaySeconds: 60
           periodSeconds: 30
           timeoutSeconds: 10
@@ -128,7 +128,7 @@ spec:
   selector:
     app: embedding-service
   ports:
-  - port: 8000
+  - port: 8001
     targetPort: 8001
     protocol: TCP
     name: http
