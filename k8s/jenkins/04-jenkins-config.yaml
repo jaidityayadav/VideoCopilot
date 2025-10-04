@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jenkins-config
+  namespace: jenkins
+data:
+  jenkins.yaml: |
+    jenkins:
+      systemMessage: "VideoCopilot CI/CD Jenkins Controller"
+      numExecutors: 2
+      scmCheckoutRetryCount: 3
+      mode: NORMAL
+      
+      securityRealm:
+        local:
+          allowsSignup: false
+          users:
+            - id: "admin"
+              password: "${JENKINS_ADMIN_PASSWORD:-videocopilot123}"
+              
+      authorizationStrategy:
+        globalMatrix:
+          permissions:
+            - "Overall/Administer:admin"
+            - "Overall/Read:authenticated"
+            
+      remotingSecurity:
+        enabled: true
+        
+    jobs:
+      - script: |
+          pipelineJob('videocopilot-deploy') {
+            definition {
+              cpsScm {
+                scm {
+                  git {
+                    remote {
+                      url('https://github.com/jaidityayadav/VideoCopilot.git')
+                    }
+                    branch('*/main')
+                    branch('*/review2')
+                  }
+                }
+                scriptPath('Jenkinsfile')
+              }
+            }
+            triggers {
+              githubPush()
+            }
+          }
+          
+    unclassified:
+      location:
+        url: "http://143.244.137.118:32000/"
+        adminAddress: "admin@videocopilot.local"
+        
+      globalLibraries:
+        libraries:
+          - name: "videocopilot-pipeline"
+            retriever:
+              modernSCM:
+                scm:
+                  git:
+                    remote: "https://github.com/jaidityayadav/VideoCopilot.git"
+                    
+    tool:
+      git:
+        installations:
+        - name: "Default"
+          home: "git"

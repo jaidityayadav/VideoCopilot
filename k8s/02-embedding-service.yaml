@@ -19,9 +19,9 @@ spec:
     spec:
       containers:
       - name: embedding-service
-        image: videocopilot/embedding-service:latest
+        image: ghcr.io/jaidityayadav/VideoCopilot/embedding-service:latest
         ports:
-        - containerPort: 8000
+        - containerPort: 8001
         env:
         - name: DATABASE_URL
           valueFrom:
@@ -129,7 +129,7 @@ spec:
     app: embedding-service
   ports:
   - port: 8000
-    targetPort: 8000
+    targetPort: 8001
     protocol: TCP
     name: http
   type: ClusterIP

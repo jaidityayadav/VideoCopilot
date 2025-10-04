@@ -19,9 +19,9 @@ spec:
     spec:
       containers:
       - name: intelligence-service
-        image: videocopilot/intelligence-service:latest
+        image: ghcr.io/jaidityayadav/VideoCopilot/intelligence-service:latest
         ports:
-        - containerPort: 8001
+        - containerPort: 8002
         env:
         - name: DATABASE_URL
           valueFrom:
@@ -94,7 +94,7 @@ spec:
               name: videocopilot-config
               key: similarity-threshold
         - name: EMBEDDING_SERVICE_URL
-          value: "http://embedding-service:8000"
+          value: "http://embedding-service:8001"
         volumeMounts:
         - name: models-storage
           mountPath: /app/models
@@ -146,7 +146,7 @@ spec:
     app: intelligence-service
   ports:
   - port: 8001
-    targetPort: 8001
+    targetPort: 8002
     protocol: TCP
     name: http
   type: ClusterIP

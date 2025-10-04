@@ -19,9 +19,9 @@ spec:
     spec:
       containers:
       - name: video-processing-service
-        image: videocopilot/video-processing-service:latest
+        image: ghcr.io/jaidityayadav/VideoCopilot/video-processing-service:latest
         ports:
-        - containerPort: 8002
+        - containerPort: 8000
         env:
         - name: DATABASE_URL
           valueFrom:
@@ -58,6 +58,11 @@ spec:
             configMapKeyRef:
               name: videocopilot-config
               key: video-port
+        - name: EMBEDDING_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: videocopilot-config
+              key: embedding-service-url
         - name: WORKERS
           valueFrom:
             configMapKeyRef:
@@ -109,7 +114,7 @@ spec:
               name: videocopilot-config
               key: chunk-overlap
         - name: EMBEDDING_SERVICE_URL
-          value: "http://embedding-service:8000"
+          value: "http://embedding-service:8001"
         volumeMounts:
         - name: uploads-storage
           mountPath: /app/uploads
@@ -171,7 +176,7 @@ spec:
     app: video-processing-service
   ports:
   - port: 8002
-    targetPort: 8002
+    targetPort: 8000
     protocol: TCP
     name: http
   type: ClusterIP

@@ -19,7 +19,7 @@ spec:
     spec:
       initContainers:
       - name: migrate-database
-        image: videocopilot/web-app:latest
+        image: ghcr.io/jaidityayadav/VideoCopilot/web-app:latest
         command: ['sh', '-c', 'npx prisma migrate deploy']
         env:
         - name: DATABASE_URL
@@ -36,7 +36,7 @@ spec:
             cpu: "200m"
       containers:
       - name: web-app
-        image: videocopilot/web-app:latest
+        image: ghcr.io/jaidityayadav/VideoCopilot/web-app:latest
         ports:
         - containerPort: 3000
         env:
@@ -75,6 +75,16 @@ spec:
             configMapKeyRef:
               name: videocopilot-config
               key: web-port
+        - name: VIDEO_PROCESSING_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: videocopilot-config
+              key: video-processing-service-url
+        - name: NEXTAUTH_URL
+          valueFrom:
+            configMapKeyRef:
+              name: videocopilot-config
+              key: nextauth-url
         - name: NODE_ENV
           valueFrom:
             configMapKeyRef:
@@ -106,11 +116,11 @@ spec:
               name: videocopilot-config
               key: rate-limit-window
         - name: VIDEO_PROCESSING_SERVICE_URL
-          value: "http://video-processing-service:8002"
+          value: "http://video-processing-service:8000"
         - name: INTELLIGENCE_SERVICE_URL
-          value: "http://intelligence-service:8001"
+          value: "http://intelligence-service:8002"
         - name: EMBEDDING_SERVICE_URL
-          value: "http://embedding-service:8000"
+          value: "http://embedding-service:8001"
         - name: NEXTAUTH_URL
           value: "https://videocopilot.yourdomain.com"  # Update with your domain
         volumeMounts:
