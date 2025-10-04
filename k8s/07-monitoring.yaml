@@ -149,17 +149,17 @@ data:
 
       - job_name: 'videocopilot-embedding-service'
         static_configs:
-          - targets: ['embedding-service.videocopilot:8000']
+          - targets: ['embedding-service.videocopilot:8001']
         metrics_path: '/metrics'
 
       - job_name: 'videocopilot-intelligence-service'
         static_configs:
-          - targets: ['intelligence-service.videocopilot:8001']
+          - targets: ['intelligence-service.videocopilot:8002']
         metrics_path: '/metrics'
 
       - job_name: 'videocopilot-video-processing-service'
         static_configs:
-          - targets: ['video-processing-service.videocopilot:8002']
+          - targets: ['video-processing-service.videocopilot:8000']
         metrics_path: '/metrics'
 
       # Jenkins

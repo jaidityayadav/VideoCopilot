@@ -4,33 +4,19 @@
 # Database URL is configured in secrets: videocopilot-secrets.database-url
 # 
 # No database deployment needed - Neon DB is external managed service
-#
-# Keeping this file as placeholder for potential future database requirements
+# This file is kept for reference and potential future database requirements
 
-# If you need to switch back to self-hosted PostgreSQL, uncomment below:
-#
-# apiVersion: apps/v1
-# kind: Deployment
-# metadata:
-#   name: postgres
-#   namespace: videocopilot
-#   labels:
-#     app: postgres
-#     component: database
-# spec:
-#   replicas: 1
-#   selector:
-#     matchLabels:
-#       app: postgres
-#   template:
-#     metadata:
-#       labels:
-#         app: postgres
-#         component: database
-#     spec:
-#       containers:
-#       - name: postgres
-#         image: postgres:15-alpine
+---
+# Placeholder ConfigMap to indicate external database usage
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: database-info
+  namespace: videocopilot
+data:
+  database-type: "external-neon-postgresql"
+  connection-method: "DATABASE_URL from secrets"
+  note: "Database is managed externally via Neon PostgreSQL service"
         ports:
         - containerPort: 5432
         env:
