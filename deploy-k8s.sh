@@ -158,9 +158,8 @@ update_image_tags() {
 deploy_manifests() {
     echo -e "${YELLOW}🚀 Deploying Kubernetes manifests...${NC}"
     
-    # Deploy in order
+    # Deploy in order (database excluded - using external Neon DB)
     manifests=(
-        "k8s/01-database.yaml"
         "k8s/02-embedding-service.yaml"
         "k8s/03-intelligence-service.yaml"
         "k8s/04-video-processing-service.yaml"

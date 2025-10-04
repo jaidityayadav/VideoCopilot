@@ -5,9 +5,9 @@ metadata:
   namespace: videocopilot
   annotations:
     kubernetes.io/ingress.class: "traefik"
-    traefik.ingress.kubernetes.io/router.middlewares: videocopilot-auth@kubernetescrd,videocopilot-rate-limit@kubernetescrd
+    # traefik.ingress.kubernetes.io/router.middlewares: videocopilot-auth@kubernetescrd,videocopilot-rate-limit@kubernetescrd
     traefik.ingress.kubernetes.io/router.tls: "true"
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
   labels:
     app: videocopilot-ingress
 spec:
@@ -32,44 +32,44 @@ spec:
           service:
             name: embedding-service
             port:
-              number: 8000
+              number: 8001
       - path: /api/intelligence
         pathType: Prefix
         backend:
           service:
             name: intelligence-service
             port:
-              number: 8001
+              number: 8002
       - path: /api/video-processing
         pathType: Prefix
         backend:
           service:
             name: video-processing-service
             port:
-              number: 8002
----
-# Traefik Middleware for rate limiting
-apiVersion: traefik.containo.us/v1alpha1
-kind: Middleware
-metadata:
-  name: rate-limit
-  namespace: videocopilot
-spec:
-  rateLimit:
-    burst: 10
-    average: 100
-    period: 1m
----
-# Traefik Middleware for authentication (optional)
-apiVersion: traefik.containo.us/v1alpha1
-kind: Middleware
-metadata:
-  name: auth
-  namespace: videocopilot
-spec:
-  headers:
-    customRequestHeaders:
-      X-Forwarded-Proto: "https"
+              number: 8000
+# ---
+# # Traefik Middleware for rate limiting (requires Traefik CRDs)
+# apiVersion: traefik.containo.us/v1alpha1
+# kind: Middleware
+# metadata:
+#   name: rate-limit
+#   namespace: videocopilot
+# spec:
+#   rateLimit:
+#     burst: 10
+#     average: 100
+#     period: 1m
+# ---
+# # Traefik Middleware for authentication (optional)
+# apiVersion: traefik.containo.us/v1alpha1
+# kind: Middleware
+# metadata:
+#   name: auth
+#   namespace: videocopilot
+# spec:
+#   headers:
+#     customRequestHeaders:
+#       X-Forwarded-Proto: "https"
 ---
 # NodePort Service for direct access (fallback)
 apiVersion: v1
