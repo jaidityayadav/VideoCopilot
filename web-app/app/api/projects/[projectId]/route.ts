@@ -12,10 +12,16 @@ const s3 = new S3Client({
     },
 });
 
-// Initialize Pinecone client
-const pc = new Pinecone({
-    apiKey: process.env.PINECONE_API_KEY!,
-});
+// Initialize Pinecone client (moved to function level to avoid build-time issues)
+function getPineconeClient() {
+    const apiKey = process.env.PINECONE_API_KEY;
+    if (!apiKey) {
+        throw new Error('PINECONE_API_KEY environment variable is required');
+    }
+    return new Pinecone({
+        apiKey,
+    });
+}
 
 // GET - Fetch a single project by ID
 export async function GET(req: Request, { params }: { params: Promise<{ projectId: string }> }) {
@@ -211,6 +217,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ proje
         // Delete Pinecone vectors for this project
         try {
             const indexName = process.env.PINECONE_INDEX_NAME || 'vidwise-embeddings';
+            const pc = getPineconeClient();
             const index = pc.index(indexName);
 
             // Delete all vectors in the project's namespace
