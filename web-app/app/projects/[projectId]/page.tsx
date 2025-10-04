@@ -1,17 +1,28 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
+import { useState, useEffect, use, useRef } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
+
+interface Transcript {
+    id: string;
+    language: string;
+    srtUrl: string;
+    txtUrl: string;
+    createdAt: string;
+}
 
 interface Video {
     id: string;
     s3Key: string;
+    transcripts?: Transcript[];
 }
 
 interface VideoWithSignedUrl extends Video {
     signedUrl?: string;
-}interface Project {
+}
+
+interface Project {
     id: string;
     name: string;
     thumbnail?: string;
@@ -23,6 +34,43 @@ interface VideoWithSignedUrl extends Video {
     };
 }
 
+const LANGUAGE_NAMES: { [key: string]: string } = {
+    'en': 'English',
+    'es': 'Spanish',
+    'hi': 'Hindi',
+    'fr': 'French',
+    'de': 'German',
+    'it': 'Italian',
+    'pt': 'Portuguese',
+    'ru': 'Russian',
+    'ja': 'Japanese',
+    'ko': 'Korean',
+    'zh': 'Chinese',
+    'ta': 'Tamil'
+};
+
+// Chat interfaces
+interface ChatMessage {
+    id: string;
+    type: 'user' | 'assistant' | 'system';
+    message: string;
+    sources?: Array<{
+        video_id?: string;
+        chunk_index?: number;
+        timestamp?: string;
+        content_preview?: string;
+        score?: number;
+    }>;
+    timestamp: Date;
+}
+
+interface ChatState {
+    messages: ChatMessage[];
+    isConnected: boolean;
+    isTyping: boolean;
+    connectionError?: string;
+}
+
 export default function ProjectDetail({ params }: { params: Promise<{ projectId: string }> }) {
     const resolvedParams = use(params);
     const [project, setProject] = useState<Project | null>(null);
@@ -31,34 +79,132 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
     const [deleting, setDeleting] = useState(false);
     const [deletingVideos, setDeletingVideos] = useState<Set<string>>(new Set());
     const [error, setError] = useState<string | null>(null);
+    const [selectedTranscriptLanguage, setSelectedTranscriptLanguage] = useState<{ [videoId: string]: string }>({});
+    const [transcriptContents, setTranscriptContents] = useState<{ [txtUrl: string]: string }>({});
+    const [loadingTranscripts, setLoadingTranscripts] = useState<Set<string>>(new Set());
+
+    // Chat state
+    const [chatState, setChatState] = useState<ChatState>({
+        messages: [],
+        isConnected: false,
+        isTyping: false
+    });
+    const [chatInput, setChatInput] = useState('');
+    const [isChatExpanded, setIsChatExpanded] = useState(false);
+    const wsRef = useRef<WebSocket | null>(null);
+    const chatMessagesRef = useRef<HTMLDivElement>(null);
+
     const router = useRouter();
 
     useEffect(() => {
         fetchProject();
-    }, [resolvedParams.projectId]);
+
+        // Auto-refresh if project is still processing
+        const interval = setInterval(() => {
+            if (project?.status === 'PROCESSING') {
+                fetchProject();
+            }
+        }, 10000); // Refresh every 10 seconds
+
+        return () => clearInterval(interval);
+    }, [resolvedParams.projectId, project?.status]);
 
     const fetchSignedUrl = async (s3Key: string, videoId: string): Promise<string> => {
         try {
+            console.log('Fetching signed URL for:', { s3Key, videoId });
+
             const response = await axios.post('/api/signed-url', {
                 key: s3Key,
                 videoId
+            }, {
+                withCredentials: true
             });
 
+            console.log('Signed URL response:', response.status, response.data);
+
             if (response.status !== 200) {
-                throw new Error('Failed to get signed URL');
+                throw new Error(`Failed to get signed URL: ${response.status}`);
             }
 
             const { signedUrl } = response.data;
+            if (!signedUrl) {
+                throw new Error('No signed URL in response');
+            }
+
             return signedUrl;
         } catch (error) {
-            console.error('Error fetching signed URL:', error);
+            console.error('Error fetching signed URL for key', s3Key, ':', error);
+            if (axios.isAxiosError(error)) {
+                console.error('Response data:', error.response?.data);
+                console.error('Response status:', error.response?.status);
+            }
             return '';
         }
     };
 
+    const fetchTranscriptContent = async (txtUrl: string, videoId: string): Promise<string> => {
+        try {
+            if (transcriptContents[txtUrl]) {
+                return transcriptContents[txtUrl];
+            }
+
+            setLoadingTranscripts(prev => new Set(prev).add(txtUrl));
+
+            console.log('Fetching transcript content for txtUrl:', txtUrl, 'Video ID:', videoId);
+
+            // Use our server-side proxy endpoint to fetch transcript content
+            const response = await axios.post('/api/transcript-content', {
+                txtUrl: txtUrl,
+                videoId: videoId
+            }, {
+                withCredentials: true
+            });
+
+            if (response.status !== 200) {
+                throw new Error(`Failed to fetch transcript content: ${response.status}`);
+            }
+
+            const { content, success } = response.data;
+            if (!success || !content) {
+                throw new Error('Invalid response from transcript API');
+            }
+
+            console.log('Successfully fetched transcript content, length:', content.length);
+            console.log('Content preview (first 200 chars):', content.substring(0, 200));
+
+            setTranscriptContents(prev => {
+                const newState = { ...prev, [txtUrl]: content };
+                console.log('Updated transcript contents state:', Object.keys(newState));
+                return newState;
+            });
+            return content;
+        } catch (error) {
+            console.error('Error fetching transcript content:', error);
+            console.error('txtUrl:', txtUrl, 'videoId:', videoId);
+
+            // Set error message in transcripts
+            const errorMessage = `Failed to load transcript: ${error instanceof Error ? error.message : 'Unknown error'}`;
+            setTranscriptContents(prev => ({ ...prev, [txtUrl]: errorMessage }));
+            return errorMessage;
+        } finally {
+            setLoadingTranscripts(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(txtUrl);
+                return newSet;
+            });
+        }
+    };
+
+    const handleLanguageSelect = async (videoId: string, language: string, txtUrl: string) => {
+        setSelectedTranscriptLanguage(prev => ({ ...prev, [videoId]: language }));
+        await fetchTranscriptContent(txtUrl, videoId);
+    };
+
     const fetchProject = async () => {
         try {
-            const response = await axios.get(`/api/projects/${resolvedParams.projectId}`);
+            const response = await axios.get(`/api/projects/${resolvedParams.projectId}`, {
+                withCredentials: true
+            });
 
             if (response.status !== 200) {
                 if (response.status === 404) {
@@ -104,7 +250,9 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
         setDeleting(true);
 
         try {
-            const response = await axios.delete(`/api/projects/${project.id}`);
+            const response = await axios.delete(`/api/projects/${project.id}`, {
+                withCredentials: true
+            });
 
             if (response.status !== 200) {
                 const errorData = response.data;
@@ -133,7 +281,9 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
         setDeletingVideos(prev => new Set(prev).add(videoId));
 
         try {
-            const response = await axios.delete(`/api/projects/${project?.id}/videos/${videoId}`);
+            const response = await axios.delete(`/api/projects/${project?.id}/videos/${videoId}`, {
+                withCredentials: true
+            });
 
             if (response.status !== 200) {
                 const errorData = response.data;
@@ -162,6 +312,135 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
             });
         }
     };
+
+    // Chat functions
+    const connectToChat = () => {
+        if (wsRef.current || !project) return;
+
+        const wsUrl = `ws://localhost:8002/chat/${project.id}`;
+        console.log('Connecting to intelligence service:', wsUrl);
+
+        wsRef.current = new WebSocket(wsUrl);
+
+        wsRef.current.onopen = () => {
+            console.log('Connected to intelligence service');
+            setChatState(prev => ({ ...prev, isConnected: true, connectionError: undefined }));
+        };
+
+        wsRef.current.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            console.log('Received message:', data);
+
+            switch (data.type) {
+                case 'welcome':
+                    setChatState(prev => ({
+                        ...prev,
+                        messages: [...prev.messages, {
+                            id: Date.now().toString(),
+                            type: 'system',
+                            message: data.message,
+                            timestamp: new Date()
+                        }]
+                    }));
+                    break;
+
+                case 'typing':
+                    setChatState(prev => ({ ...prev, isTyping: true }));
+                    break;
+
+                case 'response':
+                    setChatState(prev => ({
+                        ...prev,
+                        isTyping: false,
+                        messages: [...prev.messages, {
+                            id: Date.now().toString(),
+                            type: 'assistant',
+                            message: data.message,
+                            sources: data.sources || [],
+                            timestamp: new Date()
+                        }]
+                    }));
+                    break;
+
+                case 'error':
+                    setChatState(prev => ({
+                        ...prev,
+                        isTyping: false,
+                        messages: [...prev.messages, {
+                            id: Date.now().toString(),
+                            type: 'system',
+                            message: `Error: ${data.message}`,
+                            timestamp: new Date()
+                        }]
+                    }));
+                    break;
+            }
+        };
+
+        wsRef.current.onclose = () => {
+            console.log('Disconnected from intelligence service');
+            setChatState(prev => ({ ...prev, isConnected: false }));
+            wsRef.current = null;
+        };
+
+        wsRef.current.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            setChatState(prev => ({
+                ...prev,
+                connectionError: 'Failed to connect to intelligence service. Make sure it\'s running on port 8002.'
+            }));
+        };
+    };
+
+    const disconnectFromChat = () => {
+        if (wsRef.current) {
+            wsRef.current.close();
+            wsRef.current = null;
+        }
+        setChatState(prev => ({ ...prev, isConnected: false }));
+    };
+
+    const sendChatMessage = () => {
+        if (!chatInput.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+        const userMessage: ChatMessage = {
+            id: Date.now().toString(),
+            type: 'user',
+            message: chatInput.trim(),
+            timestamp: new Date()
+        };
+
+        setChatState(prev => ({
+            ...prev,
+            messages: [...prev.messages, userMessage]
+        }));
+
+        wsRef.current.send(JSON.stringify({ message: chatInput.trim() }));
+        setChatInput('');
+    };
+
+    const handleChatKeyPress = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendChatMessage();
+        }
+    };
+
+    // Auto-scroll chat messages
+    useEffect(() => {
+        if (chatMessagesRef.current) {
+            chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+        }
+    }, [chatState.messages]);
+
+    // Cleanup WebSocket on unmount
+    useEffect(() => {
+        return () => {
+            if (wsRef.current) {
+                wsRef.current.close();
+            }
+        };
+    }, []);
 
     if (loading) {
         return (
@@ -286,7 +565,19 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                                                     className="w-full h-full object-cover"
                                                     controls
                                                     preload="metadata"
+                                                    onError={(e) => {
+                                                        console.error('Video failed to load:', video.signedUrl);
+                                                        console.error('Video error:', e);
+                                                    }}
+                                                    onLoadStart={() => console.log('Video load started:', video.signedUrl)}
+                                                    onLoadedData={() => console.log('Video loaded successfully:', video.signedUrl)}
                                                 />
+                                            ) : video.signedUrl === '' ? (
+                                                <div className="text-center">
+                                                    <div className="text-3xl mb-2">❌</div>
+                                                    <p className="text-sm text-red-400">Failed to load video</p>
+                                                    <p className="text-xs text-gray-500 mt-1">Check console for details</p>
+                                                </div>
                                             ) : (
                                                 <div className="text-center">
                                                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-2"></div>
@@ -310,12 +601,18 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                                         </div>
                                         <div className="p-4">
                                             <h3 className="font-semibold mb-2">Video {index + 1}</h3>
+                                            <div className="text-xs text-gray-500 mb-2">
+                                                S3 Key: {video.s3Key}
+                                            </div>
                                             <div className="flex items-center justify-between text-sm text-gray-400">
                                                 <span>
-                                                    Video ready
+                                                    {video.signedUrl ? 'Video ready' : video.signedUrl === '' ? 'Load failed' : 'Loading...'}
                                                 </span>
-                                                <button className="text-blue-400 hover:text-blue-300 transition">
-                                                    View Details
+                                                <button
+                                                    onClick={() => console.log('Video details:', video)}
+                                                    className="text-blue-400 hover:text-blue-300 transition"
+                                                >
+                                                    Debug Info
                                                 </button>
                                             </div>
                                         </div>
@@ -343,40 +640,261 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
                         )}
                     </div>
 
-                    {/* Analysis Section */}
-                    {project.status === 'COMPLETED' && (
+                    {/* Transcripts Section */}
+                    {videosWithUrls.some(video => video.transcripts && video.transcripts.length > 0) && (
                         <div>
-                            <h2 className="text-2xl font-bold mb-6">Analysis & Insights</h2>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                                    <h3 className="font-semibold mb-4">📊 Video Analytics</h3>
-                                    <p className="text-gray-400 text-sm">
-                                        View detailed analytics about your video content, engagement patterns, and key insights.
+                            <h2 className="text-2xl font-bold mb-6">Generated Transcripts</h2>
+                            <div className="space-y-6">
+                                {videosWithUrls.map((video, videoIndex) => {
+                                    if (!video.transcripts || video.transcripts.length === 0) return null;
+
+                                    const selectedLanguage = selectedTranscriptLanguage[video.id];
+                                    const selectedTranscript = selectedLanguage
+                                        ? video.transcripts.find(t => t.language === selectedLanguage)
+                                        : video.transcripts[0]; // Default to first transcript
+
+                                    return (
+                                        <div key={video.id} className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                                            <h3 className="text-lg font-semibold mb-4">Video {videoIndex + 1} Transcripts</h3>
+
+                                            {/* Language Selector */}
+                                            <div className="mb-6">
+                                                <label htmlFor={`language-${video.id}`} className="block text-sm font-medium text-gray-300 mb-2">
+                                                    Select Language:
+                                                </label>
+                                                <select
+                                                    id={`language-${video.id}`}
+                                                    value={selectedLanguage || video.transcripts[0]?.language}
+                                                    onChange={(e) => {
+                                                        const selectedLang = e.target.value;
+                                                        const transcript = video.transcripts?.find(t => t.language === selectedLang);
+                                                        if (transcript) {
+                                                            handleLanguageSelect(video.id, selectedLang, transcript.txtUrl);
+                                                        }
+                                                    }}
+                                                    className="w-full md:w-auto px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                >
+                                                    {video.transcripts.map((transcript) => (
+                                                        <option key={transcript.id} value={transcript.language}>
+                                                            {LANGUAGE_NAMES[transcript.language] || transcript.language}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {/* Transcript Content */}
+                                            {selectedTranscript && (
+                                                <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                                                    <div className="flex items-center justify-between mb-4">
+                                                        <div className="flex items-center space-x-2">
+                                                            <span className="text-xl">📝</span>
+                                                            <span className="font-medium">
+                                                                {LANGUAGE_NAMES[selectedTranscript.language] || selectedTranscript.language} Transcript
+                                                            </span>
+                                                        </div>
+                                                        <span className="text-xs text-gray-400">
+                                                            {new Date(selectedTranscript.createdAt).toLocaleDateString()}
+                                                        </span>
+                                                    </div>
+
+                                                    {loadingTranscripts.has(selectedTranscript.txtUrl) ? (
+                                                        <div className="flex items-center justify-center py-8">
+                                                            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500 mr-3"></div>
+                                                            <span className="text-gray-400">Loading transcript...</span>
+                                                        </div>
+                                                    ) : transcriptContents[selectedTranscript.txtUrl] ? (
+                                                        <div className="max-h-96 overflow-y-auto">
+                                                            <p className="text-gray-300 leading-relaxed whitespace-pre-wrap">
+                                                                {(() => {
+                                                                    const content = transcriptContents[selectedTranscript.txtUrl];
+                                                                    console.log('Rendering transcript content for:', selectedTranscript.txtUrl, 'Content length:', content?.length);
+                                                                    return content;
+                                                                })()}
+                                                            </p>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="text-center py-6">
+                                                            <button
+                                                                onClick={() => fetchTranscriptContent(selectedTranscript.txtUrl, video.id)}
+                                                                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition"
+                                                            >
+                                                                Load Transcript
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* AI Chat Section */}
+                    <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                        <div
+                            className="flex items-center justify-between p-4 bg-gray-800 cursor-pointer hover:bg-gray-750 transition-colors"
+                            onClick={() => setIsChatExpanded(!isChatExpanded)}
+                        >
+                            <div className="flex items-center space-x-3">
+                                <div className="w-3 h-3 rounded-full bg-gradient-to-r from-blue-400 to-purple-500"></div>
+                                <h3 className="text-lg font-semibold">AI Assistant</h3>
+                                <span className="text-sm text-gray-400">
+                                    Ask questions about your video content
+                                </span>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                {chatState.connectionError && (
+                                    <span className="text-red-400 text-sm">Connection Error</span>
+                                )}
+                                {chatState.isConnected ? (
+                                    <div className="flex items-center space-x-2">
+                                        <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                                        <span className="text-green-400 text-sm">Connected</span>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center space-x-2">
+                                        <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
+                                        <span className="text-gray-400 text-sm">Disconnected</span>
+                                    </div>
+                                )}
+                                <svg
+                                    className={`w-5 h-5 text-gray-400 transition-transform ${isChatExpanded ? 'rotate-180' : ''}`}
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                            </div>
+                        </div>
+
+                        {isChatExpanded && (
+                            <div className="p-4">
+                                {/* Connection Controls */}
+                                <div className="flex items-center justify-between mb-4">
+                                    <p className="text-sm text-gray-400">
+                                        {chatState.isConnected
+                                            ? "Connected to AI assistant. Ask questions about your video transcripts!"
+                                            : "Connect to start chatting with AI about your video content."
+                                        }
                                     </p>
-                                    <button className="mt-4 text-blue-400 hover:text-blue-300 transition text-sm">
-                                        View Analytics →
-                                    </button>
+                                    {!chatState.isConnected ? (
+                                        <button
+                                            onClick={connectToChat}
+                                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm transition-colors"
+                                        >
+                                            Connect
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={disconnectFromChat}
+                                            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm transition-colors"
+                                        >
+                                            Disconnect
+                                        </button>
+                                    )}
                                 </div>
 
-                                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                                    <h3 className="font-semibold mb-4">📝 Transcripts</h3>
-                                    <p className="text-gray-400 text-sm">
-                                        Access automatically generated transcripts with timestamps and speaker identification.
-                                    </p>
-                                    <button className="mt-4 text-blue-400 hover:text-blue-300 transition text-sm">
-                                        View Transcripts →
-                                    </button>
+                                {chatState.connectionError && (
+                                    <div className="mb-4 p-3 bg-red-900/20 border border-red-800 rounded-lg">
+                                        <p className="text-red-400 text-sm">{chatState.connectionError}</p>
+                                        <p className="text-gray-400 text-xs mt-1">
+                                            Make sure the intelligence service is running on port 8002
+                                        </p>
+                                    </div>
+                                )}
+
+                                {/* Chat Messages */}
+                                <div
+                                    ref={chatMessagesRef}
+                                    className="h-96 overflow-y-auto bg-gray-800 rounded-lg p-4 mb-4 space-y-4"
+                                >
+                                    {chatState.messages.length === 0 ? (
+                                        <div className="text-center text-gray-500 py-8">
+                                            <div className="text-4xl mb-2">🤖</div>
+                                            <p>No messages yet. Start a conversation!</p>
+                                        </div>
+                                    ) : (
+                                        chatState.messages.map((message) => (
+                                            <div key={message.id} className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                                <div className={`max-w-[80%] rounded-lg px-4 py-2 ${message.type === 'user'
+                                                        ? 'bg-blue-600 text-white'
+                                                        : message.type === 'system'
+                                                            ? 'bg-gray-700 text-gray-300'
+                                                            : 'bg-gray-700 text-white'
+                                                    }`}>
+                                                    <p className="whitespace-pre-wrap">{message.message}</p>
+                                                    {message.sources && message.sources.length > 0 && (
+                                                        <div className="mt-2 pt-2 border-t border-gray-600">
+                                                            <p className="text-xs text-gray-400 mb-1">Sources:</p>
+                                                            {message.sources.map((source, idx) => (
+                                                                <div key={idx} className="text-xs text-gray-300 mb-1">
+                                                                    <span className="font-medium">Video {source.video_id}</span>
+                                                                    {source.timestamp && (
+                                                                        <span className="text-gray-400"> at {source.timestamp}</span>
+                                                                    )}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    <p className="text-xs text-gray-400 mt-1">
+                                                        {message.timestamp.toLocaleTimeString()}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+
+                                    {chatState.isTyping && (
+                                        <div className="flex justify-start">
+                                            <div className="bg-gray-700 rounded-lg px-4 py-2">
+                                                <div className="flex space-x-1">
+                                                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                                                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                                                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
 
-                                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-                                    <h3 className="font-semibold mb-4">🎯 Key Moments</h3>
-                                    <p className="text-gray-400 text-sm">
-                                        Discover the most important moments and highlights from your video content.
-                                    </p>
-                                    <button className="mt-4 text-blue-400 hover:text-blue-300 transition text-sm">
-                                        Explore Moments →
+                                {/* Chat Input */}
+                                <div className="flex space-x-2">
+                                    <textarea
+                                        value={chatInput}
+                                        onChange={(e) => setChatInput(e.target.value)}
+                                        onKeyPress={handleChatKeyPress}
+                                        placeholder={chatState.isConnected ? "Ask about your video content..." : "Connect to start chatting"}
+                                        disabled={!chatState.isConnected}
+                                        className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white placeholder-gray-400 resize-none disabled:opacity-50 disabled:cursor-not-allowed focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                        rows={1}
+                                    />
+                                    <button
+                                        onClick={sendChatMessage}
+                                        disabled={!chatState.isConnected || !chatInput.trim()}
+                                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                                    >
+                                        Send
                                     </button>
                                 </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Processing Status */}
+                    {project.status === 'PROCESSING' && (
+                        <div className="bg-yellow-900/20 border border-yellow-800 rounded-xl p-6">
+                            <div className="flex items-center space-x-3 mb-4">
+                                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-yellow-500"></div>
+                                <h3 className="text-lg font-semibold text-yellow-400">Processing Videos</h3>
+                            </div>
+                            <p className="text-gray-300 mb-4">
+                                We're generating transcripts for your videos in multiple languages. This may take a few minutes depending on video length.
+                            </p>
+                            <div className="text-sm text-gray-400">
+                                This page will automatically refresh to show progress.
                             </div>
                         </div>
                     )}

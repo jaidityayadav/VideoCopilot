@@ -1,1 +1,5 @@
 **/.DS_STORE
+**/.env
+**/.env.docker
+**/.env.local
+**/venv/

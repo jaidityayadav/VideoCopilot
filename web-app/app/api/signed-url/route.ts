@@ -21,6 +21,7 @@ export async function POST(req: Request) {
         }
 
         const { key, videoId } = await req.json();
+        console.log('Signed URL request:', { key, videoId, userId });
 
         if (!key) {
             return NextResponse.json({ error: "S3 key is required" }, { status: 400 });
@@ -42,7 +43,8 @@ export async function POST(req: Request) {
             }
         } else {
             // If no videoId, check if the key belongs to the user (based on path structure)
-            if (!key.startsWith(`uploads/${userId}/`)) {
+            // Key format is: userId/projectId/videos/filename
+            if (!key.startsWith(`${userId}/`)) {
                 return NextResponse.json({ error: "Access denied" }, { status: 403 });
             }
         }
@@ -56,6 +58,8 @@ export async function POST(req: Request) {
         const signedUrl = await getSignedUrl(s3, command, {
             expiresIn: 3600 // 1 hour
         });
+
+        console.log('Generated signed URL successfully for key:', key);
 
         return NextResponse.json({
             signedUrl,

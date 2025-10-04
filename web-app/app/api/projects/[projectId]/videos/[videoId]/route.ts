@@ -27,6 +27,9 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ proje
                 project: {
                     ownerId: userId
                 }
+            },
+            include: {
+                transcripts: true // Include transcripts for S3 cleanup
             }
         });
 
@@ -34,18 +37,76 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ proje
             return NextResponse.json({ error: "Video not found or access denied" }, { status: 404 });
         }
 
-        // Delete the S3 file
-        try {
-            const deleteCommand = new DeleteObjectCommand({
-                Bucket: process.env.AWS_S3_BUCKET!,
-                Key: video.s3Key,
-            });
-            await s3.send(deleteCommand);
-            console.log(`Deleted S3 object: ${video.s3Key}`);
-        } catch (error) {
-            console.error(`Failed to delete S3 object ${video.s3Key}:`, error);
-            // Continue with database deletion even if S3 deletion fails
-        }
+        // Delete the S3 files (video and all transcripts)
+        const deletePromises: Promise<void>[] = [];
+
+        // Delete video file from S3
+        deletePromises.push(
+            (async () => {
+                try {
+                    const deleteCommand = new DeleteObjectCommand({
+                        Bucket: process.env.AWS_S3_BUCKET!,
+                        Key: video.s3Key,
+                    });
+                    await s3.send(deleteCommand);
+                    console.log(`Deleted S3 video: ${video.s3Key}`);
+                } catch (error) {
+                    console.error(`Failed to delete S3 video ${video.s3Key}:`, error);
+                }
+            })()
+        );
+
+        // Delete transcript files from S3
+        video.transcripts.forEach((transcript) => {
+            // Delete SRT file
+            deletePromises.push(
+                (async () => {
+                    try {
+                        let s3Key = transcript.srtUrl;
+                        if (s3Key.startsWith('s3://')) {
+                            const parts = s3Key.split('/');
+                            s3Key = parts.slice(3).join('/');
+                        }
+
+                        const deleteCommand = new DeleteObjectCommand({
+                            Bucket: process.env.AWS_S3_BUCKET!,
+                            Key: s3Key,
+                        });
+                        await s3.send(deleteCommand);
+                        console.log(`Deleted S3 SRT transcript: ${s3Key}`);
+                    } catch (error) {
+                        console.error(`Failed to delete S3 SRT transcript ${transcript.srtUrl}:`, error);
+                    }
+                })()
+            );
+
+            // Delete TXT file if it exists
+            if (transcript.txtUrl) {
+                deletePromises.push(
+                    (async () => {
+                        try {
+                            let s3Key = transcript.txtUrl;
+                            if (s3Key.startsWith('s3://')) {
+                                const parts = s3Key.split('/');
+                                s3Key = parts.slice(3).join('/');
+                            }
+
+                            const deleteCommand = new DeleteObjectCommand({
+                                Bucket: process.env.AWS_S3_BUCKET!,
+                                Key: s3Key,
+                            });
+                            await s3.send(deleteCommand);
+                            console.log(`Deleted S3 TXT transcript: ${s3Key}`);
+                        } catch (error) {
+                            console.error(`Failed to delete S3 TXT transcript ${transcript.txtUrl}:`, error);
+                        }
+                    })()
+                );
+            }
+        });
+
+        // Wait for all S3 deletions to complete (or fail)
+        await Promise.allSettled(deletePromises);
 
         // Delete the video from database
         await prisma.video.delete({
