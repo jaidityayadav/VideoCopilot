@@ -45,15 +45,12 @@ WORKDIR /app
 # Copy application code
 COPY . .
 
-# Generate Prisma client
-RUN prisma generate
-
 # Create necessary directories including cache
 RUN mkdir -p /app/models /app/logs /app/.cache \
     && chown -R appuser:appuser /app \
     && chown -R appuser:appuser /home/appuser
 
-# Set environment variables for HuggingFace cache
+# Set environment variables for any ML model caches
 ENV TRANSFORMERS_CACHE=/app/.cache/transformers
 ENV HF_HOME=/app/.cache/huggingface
 
@@ -61,11 +58,11 @@ ENV HF_HOME=/app/.cache/huggingface
 USER appuser
 
 # Expose port
-EXPOSE 8001
+EXPOSE 8002
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8002/health || exit 1
 
 # Start application with metrics
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]

@@ -1,0 +1,121 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: videocopilot-ingress
+  namespace: videocopilot
+  annotations:
+    kubernetes.io/ingress.class: "traefik"
+    traefik.ingress.kubernetes.io/router.middlewares: videocopilot-auth@kubernetescrd,videocopilot-rate-limit@kubernetescrd
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  labels:
+    app: videocopilot-ingress
+spec:
+  tls:
+  - hosts:
+    - videocopilot.yourdomain.com  # Update with your domain
+    secretName: videocopilot-tls
+  rules:
+  - host: videocopilot.yourdomain.com  # Update with your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web-app
+            port:
+              number: 3000
+      - path: /api/embedding
+        pathType: Prefix
+        backend:
+          service:
+            name: embedding-service
+            port:
+              number: 8000
+      - path: /api/intelligence
+        pathType: Prefix
+        backend:
+          service:
+            name: intelligence-service
+            port:
+              number: 8001
+      - path: /api/video-processing
+        pathType: Prefix
+        backend:
+          service:
+            name: video-processing-service
+            port:
+              number: 8002
+---
+# Traefik Middleware for rate limiting
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: rate-limit
+  namespace: videocopilot
+spec:
+  rateLimit:
+    burst: 10
+    average: 100
+    period: 1m
+---
+# Traefik Middleware for authentication (optional)
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: auth
+  namespace: videocopilot
+spec:
+  headers:
+    customRequestHeaders:
+      X-Forwarded-Proto: "https"
+---
+# NodePort Service for direct access (fallback)
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app-nodeport
+  namespace: videocopilot
+  labels:
+    app: web-app
+    service-type: nodeport
+spec:
+  selector:
+    app: web-app
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 30080
+    protocol: TCP
+    name: http
+  type: NodePort
+---
+# LoadBalancer Service for external access (if available)
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app-loadbalancer
+  namespace: videocopilot
+  labels:
+    app: web-app
+    service-type: loadbalancer
+  annotations:
+    service.beta.kubernetes.io/do-loadbalancer-name: "videocopilot-lb"
+    service.beta.kubernetes.io/do-loadbalancer-protocol: "http"
+    service.beta.kubernetes.io/do-loadbalancer-algorithm: "round_robin"
+    service.beta.kubernetes.io/do-loadbalancer-health-check-path: "/api/health"
+    service.beta.kubernetes.io/do-loadbalancer-health-check-protocol: "http"
+spec:
+  selector:
+    app: web-app
+  ports:
+  - port: 80
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  - port: 443
+    targetPort: 3000
+    protocol: TCP
+    name: https
+  type: LoadBalancer

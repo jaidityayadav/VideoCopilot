@@ -1,0 +1,493 @@
+pipeline {
+    agent {
+        kubernetes {
+            label 'jenkins-agent'
+            defaultContainer 'jnlp'
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: jnlp
+    image: jenkins/inbound-agent:latest
+    args: ['\$(JENKINS_SECRET)', '\$(JENKINS_NAME)']
+  - name: docker
+    image: docker:dind
+    securityContext:
+      privileged: true
+    env:
+    - name: DOCKER_TLS_CERTDIR
+      value: ""
+    volumeMounts:
+    - name: docker-sock
+      mountPath: /var/run/docker.sock
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command:
+    - cat
+    tty: true
+  volumes:
+  - name: docker-sock
+    hostPath:
+      path: /var/run/docker.sock
+"""
+        }
+    }
+    
+    environment {
+        DOCKER_REGISTRY = 'your-registry.com'  // Update with your Docker registry
+        DOCKER_BUILDKIT = '1'
+        COMPOSE_DOCKER_CLI_BUILD = '1'
+        // Note: Infrastructure (Terraform/Ansible) is handled separately
+        // This pipeline only handles application builds and K8s deployments
+    }
+    
+    parameters {
+        choice(
+            name: 'DEPLOY_ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target deployment environment'
+        )
+        booleanParam(
+            name: 'FORCE_REBUILD_ALL',
+            defaultValue: false,
+            description: 'Force rebuild and deploy all services'
+        )
+        booleanParam(
+            name: 'SKIP_TESTS',
+            defaultValue: false,
+            description: 'Skip running tests'
+        )
+        choice(
+            name: 'DEPLOY_TARGET',
+            choices: ['auto', 'all', 'web-app', 'embedding-service', 'intelligence-service', 'video-processing-service', 'monitoring', 'jenkins'],
+            description: 'What to deploy (auto = detect changes)'
+        )
+    }
+    
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    // Get commit hash for image tagging
+                    env.COMMIT_HASH = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+                    
+                    // Get branch name
+                    env.BRANCH_NAME = sh(
+                        script: 'git rev-parse --abbrev-ref HEAD',
+                        returnStdout: true
+                    ).trim()
+                    
+                    echo "Building commit: ${env.COMMIT_HASH}"
+                    echo "Branch: ${env.BRANCH_NAME}"
+                    echo "Environment: ${params.DEPLOY_ENVIRONMENT}"
+                }
+            }
+        }
+        
+        stage('Detect Changes') {
+            steps {
+                script {
+                    // Detect which services have changed
+                    def changedFiles = sh(
+                        script: 'git diff --name-only HEAD~1 HEAD || git ls-files',
+                        returnStdout: true
+                    ).trim().split('\n')
+                    
+                    echo "Changed files: ${changedFiles.join(', ')}"
+                    
+                    // Determine which services need to be rebuilt
+                    env.BUILD_WEB_APP = params.FORCE_REBUILD_ALL ? 'true' : 'false'
+                    env.BUILD_EMBEDDING_SERVICE = params.FORCE_REBUILD_ALL ? 'true' : 'false'
+                    env.BUILD_INTELLIGENCE_SERVICE = params.FORCE_REBUILD_ALL ? 'true' : 'false'
+                    env.BUILD_VIDEO_PROCESSING_SERVICE = params.FORCE_REBUILD_ALL ? 'true' : 'false'
+                    
+                    changedFiles.each { file ->
+                        if (file.startsWith('web-app/')) {
+                            env.BUILD_WEB_APP = 'true'
+                        }
+                        if (file.startsWith('embedding-service/')) {
+                            env.BUILD_EMBEDDING_SERVICE = 'true'
+                        }
+                        if (file.startsWith('intelligence-service/')) {
+                            env.BUILD_INTELLIGENCE_SERVICE = 'true'
+                        }
+                        if (file.startsWith('video-processing-service/')) {
+                            env.BUILD_VIDEO_PROCESSING_SERVICE = 'true'
+                        }
+                        if (file.startsWith('k8s/') || file.startsWith('infrastructure/') || file.startsWith('jenkins/')) {
+                            // Infrastructure changes might affect all services
+                            env.BUILD_WEB_APP = 'true'
+                            env.BUILD_EMBEDDING_SERVICE = 'true'
+                            env.BUILD_INTELLIGENCE_SERVICE = 'true'
+                            env.BUILD_VIDEO_PROCESSING_SERVICE = 'true'
+                        }
+                    }
+                    
+                    echo "Services to build:"
+                    echo "  Web App: ${env.BUILD_WEB_APP}"
+                    echo "  Embedding Service: ${env.BUILD_EMBEDDING_SERVICE}"
+                    echo "  Intelligence Service: ${env.BUILD_INTELLIGENCE_SERVICE}"
+                    echo "  Video Processing Service: ${env.BUILD_VIDEO_PROCESSING_SERVICE}"
+                }
+            }
+        }
+        
+        stage('Build Images') {
+            parallel {
+                stage('Build Web App') {
+                    when {
+                        environment name: 'BUILD_WEB_APP', value: 'true'
+                    }
+                    steps {
+                        script {
+                            echo "Building Web App..."
+                            def image = "${DOCKER_REGISTRY}/videocopilot/web-app:${env.COMMIT_HASH}"
+                            sh """
+                                cd web-app
+                                docker build \\
+                                    --build-arg NODE_ENV=production \\
+                                    --build-arg NEXT_TELEMETRY_DISABLED=1 \\
+                                    --cache-from ${DOCKER_REGISTRY}/videocopilot/web-app:latest \\
+                                    -t ${image} \\
+                                    -t ${DOCKER_REGISTRY}/videocopilot/web-app:latest \\
+                                    -f dockerfile .
+                            """
+                            env.WEB_APP_IMAGE = image
+                        }
+                    }
+                }
+                
+                stage('Build Embedding Service') {
+                    when {
+                        environment name: 'BUILD_EMBEDDING_SERVICE', value: 'true'
+                    }
+                    steps {
+                        script {
+                            echo "Building Embedding Service..."
+                            def image = "${DOCKER_REGISTRY}/videocopilot/embedding-service:${env.COMMIT_HASH}"
+                            sh """
+                                cd embedding-service
+                                docker build \\
+                                    --cache-from ${DOCKER_REGISTRY}/videocopilot/embedding-service:latest \\
+                                    -t ${image} \\
+                                    -t ${DOCKER_REGISTRY}/videocopilot/embedding-service:latest \\
+                                    .
+                            """
+                            env.EMBEDDING_SERVICE_IMAGE = image
+                        }
+                    }
+                }
+                
+                stage('Build Intelligence Service') {
+                    when {
+                        environment name: 'BUILD_INTELLIGENCE_SERVICE', value: 'true'
+                    }
+                    steps {
+                        script {
+                            echo "Building Intelligence Service..."
+                            def image = "${DOCKER_REGISTRY}/videocopilot/intelligence-service:${env.COMMIT_HASH}"
+                            sh """
+                                cd intelligence-service
+                                docker build \\
+                                    --cache-from ${DOCKER_REGISTRY}/videocopilot/intelligence-service:latest \\
+                                    -t ${image} \\
+                                    -t ${DOCKER_REGISTRY}/videocopilot/intelligence-service:latest \\
+                                    .
+                            """
+                            env.INTELLIGENCE_SERVICE_IMAGE = image
+                        }
+                    }
+                }
+                
+                stage('Build Video Processing Service') {
+                    when {
+                        environment name: 'BUILD_VIDEO_PROCESSING_SERVICE', value: 'true'
+                    }
+                    steps {
+                        script {
+                            echo "Building Video Processing Service..."
+                            def image = "${DOCKER_REGISTRY}/videocopilot/video-processing-service:${env.COMMIT_HASH}"
+                            sh """
+                                cd video-processing-service
+                                docker build \\
+                                    --cache-from ${DOCKER_REGISTRY}/videocopilot/video-processing-service:latest \\
+                                    -t ${image} \\
+                                    -t ${DOCKER_REGISTRY}/videocopilot/video-processing-service:latest \\
+                                    .
+                            """
+                            env.VIDEO_PROCESSING_SERVICE_IMAGE = image
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Run Tests') {
+            when {
+                not { params.SKIP_TESTS }
+            }
+            parallel {
+                stage('Test Web App') {
+                    when {
+                        environment name: 'BUILD_WEB_APP', value: 'true'
+                    }
+                    steps {
+                        script {
+                            echo "Testing Web App..."
+                            sh """
+                                cd web-app
+                                npm test -- --coverage --watchAll=false
+                            """
+                        }
+                    }
+                    post {
+                        always {
+                            publishHTML([
+                                allowMissing: false,
+                                alwaysLinkToLastBuild: true,
+                                keepAll: true,
+                                reportDir: 'web-app/coverage',
+                                reportFiles: 'index.html',
+                                reportName: 'Web App Coverage Report'
+                            ])
+                        }
+                    }
+                }
+                
+                stage('Test Python Services') {
+                    when {
+                        anyOf {
+                            environment name: 'BUILD_EMBEDDING_SERVICE', value: 'true'
+                            environment name: 'BUILD_INTELLIGENCE_SERVICE', value: 'true'
+                            environment name: 'BUILD_VIDEO_PROCESSING_SERVICE', value: 'true'
+                        }
+                    }
+                    steps {
+                        script {
+                            if (env.BUILD_EMBEDDING_SERVICE == 'true') {
+                                echo "Testing Embedding Service..."
+                                sh """
+                                    cd embedding-service
+                                    python -m pytest tests/ --cov=. --cov-report=html --cov-report=xml
+                                """
+                            }
+                            
+                            if (env.BUILD_INTELLIGENCE_SERVICE == 'true') {
+                                echo "Testing Intelligence Service..."
+                                sh """
+                                    cd intelligence-service
+                                    python -m pytest tests/ --cov=. --cov-report=html --cov-report=xml
+                                """
+                            }
+                            
+                            if (env.BUILD_VIDEO_PROCESSING_SERVICE == 'true') {
+                                echo "Testing Video Processing Service..."
+                                sh """
+                                    cd video-processing-service
+                                    python -m pytest tests/ --cov=. --cov-report=html --cov-report=xml
+                                """
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Security Scan') {
+            steps {
+                script {
+                    echo "Running security scans..."
+                    
+                    // Scan images for vulnerabilities
+                    def imagesToScan = []
+                    if (env.WEB_APP_IMAGE) imagesToScan.add(env.WEB_APP_IMAGE)
+                    if (env.EMBEDDING_SERVICE_IMAGE) imagesToScan.add(env.EMBEDDING_SERVICE_IMAGE)
+                    if (env.INTELLIGENCE_SERVICE_IMAGE) imagesToScan.add(env.INTELLIGENCE_SERVICE_IMAGE)
+                    if (env.VIDEO_PROCESSING_SERVICE_IMAGE) imagesToScan.add(env.VIDEO_PROCESSING_SERVICE_IMAGE)
+                    
+                    imagesToScan.each { image ->
+                        sh """
+                            # Using Trivy for vulnerability scanning
+                            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \\
+                                aquasec/trivy image --format json --output ${image.split(':')[0].split('/').last()}-scan.json ${image}
+                        """
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: '*-scan.json', allowEmptyArchive: true
+                }
+            }
+        }
+        
+        stage('Push Images') {
+            steps {
+                script {
+                    echo "Pushing images to registry..."
+                    
+                    withCredentials([usernamePassword(credentialsId: 'docker-registry-creds', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
+                        sh "echo \$DOCKER_PASS | docker login ${DOCKER_REGISTRY} -u \$DOCKER_USER --password-stdin"
+                        
+                        if (env.WEB_APP_IMAGE) {
+                            sh "docker push ${env.WEB_APP_IMAGE}"
+                            sh "docker push ${DOCKER_REGISTRY}/videocopilot/web-app:latest"
+                        }
+                        if (env.EMBEDDING_SERVICE_IMAGE) {
+                            sh "docker push ${env.EMBEDDING_SERVICE_IMAGE}"
+                            sh "docker push ${DOCKER_REGISTRY}/videocopilot/embedding-service:latest"
+                        }
+                        if (env.INTELLIGENCE_SERVICE_IMAGE) {
+                            sh "docker push ${env.INTELLIGENCE_SERVICE_IMAGE}"
+                            sh "docker push ${DOCKER_REGISTRY}/videocopilot/intelligence-service:latest"
+                        }
+                        if (env.VIDEO_PROCESSING_SERVICE_IMAGE) {
+                            sh "docker push ${env.VIDEO_PROCESSING_SERVICE_IMAGE}"
+                            sh "docker push ${DOCKER_REGISTRY}/videocopilot/video-processing-service:latest"
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy to Kubernetes') {
+            steps {
+                container('kubectl') {
+                    script {
+                        echo "Deploying to Kubernetes..."
+                        
+                        // Use the k8s-deploy.sh script for consistent deployment logic
+                        def deployFlags = ""
+                        
+                        if (params.DEPLOY_TARGET != 'auto') {
+                            if (params.DEPLOY_TARGET == 'all') {
+                                deployFlags = "--build-all"
+                            } else if (params.DEPLOY_TARGET in ['web-app', 'embedding-service', 'intelligence-service', 'video-processing-service']) {
+                                deployFlags = "--service ${params.DEPLOY_TARGET}"
+                            } else if (params.DEPLOY_TARGET == 'monitoring') {
+                                deployFlags = "--monitoring"
+                            } else if (params.DEPLOY_TARGET == 'jenkins') {
+                                deployFlags = "--jenkins"
+                            }
+                        }
+                        
+                        if (params.FORCE_REBUILD_ALL) {
+                            deployFlags += " --build-all"
+                        }
+                        
+                        // Skip build since we already built in previous stage
+                        deployFlags += " --skip-build"
+                        
+                        sh "./k8s-deploy.sh -e ${params.DEPLOY_ENVIRONMENT} ${deployFlags}"
+                    }
+                }
+            }
+        }
+        
+        stage('Health Check') {
+            steps {
+                script {
+                    echo "Running health checks..."
+                    
+                    // Wait for all services to be ready
+                    sh """
+                        kubectl wait --for=condition=available --timeout=300s deployment/web-app -n videocopilot
+                        kubectl wait --for=condition=available --timeout=300s deployment/embedding-service -n videocopilot
+                        kubectl wait --for=condition=available --timeout=300s deployment/intelligence-service -n videocopilot
+                        kubectl wait --for=condition=available --timeout=300s deployment/video-processing-service -n videocopilot
+                    """
+                    
+                    // Get service status
+                    sh "kubectl get pods -n videocopilot"
+                    sh "kubectl get services -n videocopilot"
+                    sh "kubectl get ingress -n videocopilot"
+                    
+                    // Test endpoints
+                    sh """
+                        # Wait a bit for services to fully start
+                        sleep 30
+                        
+                        # Test health endpoints
+                        kubectl exec -n videocopilot deployment/web-app -- curl -f http://localhost:3000/api/health
+                        kubectl exec -n videocopilot deployment/embedding-service -- curl -f http://localhost:8000/health
+                        kubectl exec -n videocopilot deployment/intelligence-service -- curl -f http://localhost:8001/health
+                        kubectl exec -n videocopilot deployment/video-processing-service -- curl -f http://localhost:8002/health
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            // Clean up local Docker images to save space
+            sh '''
+                docker image prune -f
+                docker system prune -f --volumes
+            '''
+            
+            // Archive deployment logs
+            sh "kubectl logs -n videocopilot -l app=web-app --tail=100 > web-app-logs.txt || true"
+            sh "kubectl logs -n videocopilot -l app=embedding-service --tail=100 > embedding-service-logs.txt || true"
+            sh "kubectl logs -n videocopilot -l app=intelligence-service --tail=100 > intelligence-service-logs.txt || true"
+            sh "kubectl logs -n videocopilot -l app=video-processing-service --tail=100 > video-processing-service-logs.txt || true"
+            
+            archiveArtifacts artifacts: '*-logs.txt', allowEmptyArchive: true
+        }
+        
+        success {
+            echo "✅ Deployment successful!"
+            
+            // Send success notification
+            script {
+                def deployedServices = []
+                if (env.BUILD_WEB_APP == 'true') deployedServices.add('Web App')
+                if (env.BUILD_EMBEDDING_SERVICE == 'true') deployedServices.add('Embedding Service')
+                if (env.BUILD_INTELLIGENCE_SERVICE == 'true') deployedServices.add('Intelligence Service')
+                if (env.BUILD_VIDEO_PROCESSING_SERVICE == 'true') deployedServices.add('Video Processing Service')
+                
+                def message = """
+                🚀 VideoCopilot Deployment Successful
+                
+                Environment: ${params.DEPLOY_ENVIRONMENT}
+                Commit: ${env.COMMIT_HASH}
+                Branch: ${env.BRANCH_NAME}
+                Deployed Services: ${deployedServices.join(', ')}
+                
+                Build URL: ${env.BUILD_URL}
+                """
+                
+                // You can add Slack, Discord, or email notifications here
+                echo message
+            }
+        }
+        
+        failure {
+            echo "❌ Deployment failed!"
+            
+            // Get failure details
+            sh "kubectl describe pods -n videocopilot"
+            sh "kubectl get events -n videocopilot --sort-by='.lastTimestamp'"
+            
+            // Send failure notification
+            script {
+                def message = """
+                🚨 VideoCopilot Deployment Failed
+                
+                Environment: ${params.DEPLOY_ENVIRONMENT}
+                Commit: ${env.COMMIT_HASH}
+                Branch: ${env.BRANCH_NAME}
+                
+                Build URL: ${env.BUILD_URL}
+                Check logs for details.
+                """
+                
+                echo message
+            }
+        }
+    }
+}

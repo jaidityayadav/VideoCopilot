@@ -1,27 +1,147 @@
 services:
-  db:
-    image: postgres:17.4
-    container_name: videocopilot-db
-    env_file:
-      - ./web-app/.env.docker
-    environment:
-      POSTGRES_USER: videocopilotuser
-      POSTGRES_PASSWORD: videocopilotpass
-      POSTGRES_DB: videocopilotdb
-    volumes:
-      - videocopilot_postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-
-  web:
-    build: ./web-app
-    container_name: videocopilot-web
+  # Web Application - RUNS FIRST with Prisma migrate (uses Neon DB)
+  web-app:
+    build:
+      context: ./web-app
+      dockerfile: dockerfile
+    container_name: videocopilot-web-app
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
-      DATABASE_URL: postgres://videocopilotuser:videocopilotpass@db:5432/videocopilotdb
+      - DATABASE_URL=${DATABASE_URL}  # Neon DB connection string
+      - NEXTAUTH_URL=http://localhost:3000
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - JWT_SECRET=${JWT_SECRET}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+      - VIDEO_PROCESSING_SERVICE_URL=${VIDEO_PROCESSING_SERVICE_URL}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./logs/web-app:/app/logs
+    networks:
+      - videocopilot
+    command: >
+      sh -c "npx prisma migrate deploy && 
+             npx prisma generate && 
+             npm run start"
+
+  # Embedding Service - depends on web-app for DB schema
+  embedding-service:
+    build:
+      context: ./embedding-service
+      dockerfile: Dockerfile
+    container_name: videocopilot-embedding
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
     depends_on:
-      - db
+      web-app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - embedding_models:/app/models
+      - ./logs/embedding:/app/logs
+    networks:
+      - videocopilot
+    command: python main.py
+
+  # Intelligence Service - depends on embedding service
+  intelligence-service:
+    build:
+      context: ./intelligence-service
+      dockerfile: Dockerfile
+    container_name: videocopilot-intelligence
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      - EMBEDDING_SERVICE_URL=http://embedding-service:8000
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+    depends_on:
+      embedding-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - intelligence_models:/app/models
+      - ./logs/intelligence:/app/logs
+    networks:
+      - videocopilot
+    command: python main.py
+
+  # Video Processing Service - depends on intelligence service (uses Prisma)
+  video-processing-service:
+    build:
+      context: ./video-processing-service
+      dockerfile: Dockerfile
+    container_name: videocopilot-video-processing
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}  # Neon DB connection string
+      - EMBEDDING_SERVICE_URL=http://embedding-service:8001
+      - INTELLIGENCE_SERVICE_URL=http://intelligence-service:8002
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+    depends_on:
+      intelligence-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - video_uploads:/app/uploads
+      - video_temp:/app/temp
+      - whisper_models:/app/models
+      - ./logs/video-processing:/app/logs
+    networks:
+      - videocopilot
+    command: >
+      sh -c "prisma generate && 
+             python main.py"
 
 volumes:
-  videocopilot_postgres_data:
+  embedding_models:
+  intelligence_models:
+  whisper_models:
+  video_uploads:
+  video_temp:
+
+networks:
+  videocopilot:
+    driver: bridge

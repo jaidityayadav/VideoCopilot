@@ -1,0 +1,18 @@
+# DigitalOcean API token (get from https://cloud.digitalocean.com/account/api/tokens)
+do_token = "your_digitalocean_api_token_here"
+
+# Root password for the droplet (minimum 8 characters)
+# This will be used for SSH password authentication
+root_password = "your_secure_password_here"
+
+# DigitalOcean region
+region = "nyc3"
+
+# Optional: domain name for SSL certificates
+domain_name = "your-domain.com"
+
+# Environment
+environment = "prod"
+
+# Project name
+project_name = "videocopilot"

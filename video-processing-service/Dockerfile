@@ -1,5 +1,5 @@
-# Multi-stage build for optimized Python container
-FROM python:3.11-slim as builder
+# Multi-stage build for video processing service
+FROM python:3.11-slim AS builder
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -7,13 +7,14 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies
+# Install system dependencies for building
 RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
     g++ \
     git \
     curl \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Create virtual environment
@@ -34,10 +35,13 @@ RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
 COPY --from=builder --chown=appuser:appuser /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+# Install minimal runtime dependencies for video processing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /var/cache/apt/*
 
 # Set working directory
 WORKDIR /app
@@ -45,27 +49,23 @@ WORKDIR /app
 # Copy application code
 COPY . .
 
-# Generate Prisma client
-RUN prisma generate
-
 # Create necessary directories including cache
-RUN mkdir -p /app/models /app/logs /app/.cache \
+RUN mkdir -p /app/uploads /app/temp /app/models /app/logs /app/.cache \
     && chown -R appuser:appuser /app \
     && chown -R appuser:appuser /home/appuser
 
-# Set environment variables for HuggingFace cache
-ENV TRANSFORMERS_CACHE=/app/.cache/transformers
-ENV HF_HOME=/app/.cache/huggingface
+# Set environment variables for Prisma Python cache
+ENV PRISMA_PYTHON_CACHE=/app/.cache/prisma-python
 
 # Switch to non-root user
 USER appuser
 
 # Expose port
-EXPOSE 8001
+EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Start application with metrics
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002", "--workers", "2"]
