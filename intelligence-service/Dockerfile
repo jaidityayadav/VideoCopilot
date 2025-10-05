@@ -20,8 +20,11 @@ RUN apt-get update && apt-get install -y \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Copy and install common requirements first for better caching
+COPY ../requirements-common.txt ./
+RUN pip install --no-cache-dir -r requirements-common.txt
+
+COPY intelligence-service/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Production stage

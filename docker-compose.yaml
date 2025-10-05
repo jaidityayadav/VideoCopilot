@@ -35,8 +35,12 @@ services:
   # Embedding Service - depends on web-app for DB schema
   embedding-service:
     build:
-      context: ./embedding-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: embedding-service/Dockerfile
+    volumes:
+      - ./requirements-common.txt:/requirements-common.txt:ro
+      - embedding_models:/app/models
+      - ./logs/embedding:/app/logs
     container_name: videocopilot-embedding
     restart: unless-stopped
     ports:
@@ -56,9 +60,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    volumes:
-      - embedding_models:/app/models
-      - ./logs/embedding:/app/logs
+    # (removed duplicate volumes)
     networks:
       - videocopilot
     command: python main.py
@@ -66,8 +68,12 @@ services:
   # Intelligence Service - depends on embedding service
   intelligence-service:
     build:
-      context: ./intelligence-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: intelligence-service/Dockerfile
+    volumes:
+      - ./requirements-common.txt:/requirements-common.txt:ro
+      - intelligence_models:/app/models
+      - ./logs/intelligence:/app/logs
     container_name: videocopilot-intelligence
     restart: unless-stopped
     ports:
@@ -89,9 +95,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    volumes:
-      - intelligence_models:/app/models
-      - ./logs/intelligence:/app/logs
+    # (removed duplicate volumes)
     networks:
       - videocopilot
     command: python main.py
@@ -99,8 +103,15 @@ services:
   # Video Processing Service - depends on intelligence service (uses Prisma)
   video-processing-service:
     build:
-      context: ./video-processing-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: video-processing-service/Dockerfile
+    volumes:
+      - ./requirements-common.txt:/requirements-common.txt:ro
+      - video_processing_models:/app/models
+      - ./logs/video-processing:/app/logs
+      - video_uploads:/app/uploads
+      - video_temp:/app/temp
+      - whisper_models:/app/models
     container_name: videocopilot-video-processing
     restart: unless-stopped
     ports:
@@ -124,11 +135,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    volumes:
-      - video_uploads:/app/uploads
-      - video_temp:/app/temp
-      - whisper_models:/app/models
-      - ./logs/video-processing:/app/logs
+    # Duplicate volumes removed
     networks:
       - videocopilot
     command: >

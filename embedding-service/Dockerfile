@@ -20,8 +20,11 @@ RUN apt-get update && apt-get install -y \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Copy and install common requirements first for better caching
+COPY ../requirements-common.txt ./
+RUN pip install --no-cache-dir -r requirements-common.txt
+
+COPY embedding-service/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Production stage
@@ -44,9 +47,6 @@ WORKDIR /app
 
 # Copy application code
 COPY . .
-
-# Generate Prisma client
-RUN prisma generate
 
 # Create necessary directories including cache
 RUN mkdir -p /app/models /app/logs /app/.cache \
