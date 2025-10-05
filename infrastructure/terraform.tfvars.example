@@ -1,0 +1,8 @@
+# terraform.tfvars.example
+# Copy this file to terraform.tfvars and customize as needed
+
+aws_region = "us-east-1"
+instance_name = "videocopilot-instance"
+instance_type = "m7i-flex.large"
+ami_id = "ami-052064a798f08f0d3"
+key_name = "devops"

@@ -1,0 +1,2 @@
+[servers]
+videocopilot-instance ansible_host=3.81.22.78 ansible_user=ec2-user ansible_ssh_private_key_file=~/.ssh/devops.pem

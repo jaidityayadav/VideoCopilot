@@ -16,6 +16,8 @@ k8s/*secrets*.yaml
 k8s/*secret*.yaml
 **/secrets.yaml
 **/secret.yaml
+**/app-config.yaml
+**/app-secrets.yaml
 
 # Terraform
 *.tfstate
