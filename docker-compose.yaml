@@ -71,7 +71,6 @@ services:
       context: .
       dockerfile: intelligence-service/Dockerfile
     volumes:
-      - ./requirements-common.txt:/requirements-common.txt:ro
       - intelligence_models:/app/models
       - ./logs/intelligence:/app/logs
     container_name: videocopilot-intelligence
