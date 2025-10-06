@@ -16,13 +16,11 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create virtual environment
+# Create virtual environment and install requirements
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-
-# Copy only requirements and install
-COPY intelligence-service/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY requirements.txt .
+RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # Production stage
 FROM python:3.11-slim
@@ -42,8 +40,7 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy only application code
-COPY intelligence-service/ /app/
+COPY . /app/
 
 # Create necessary directories including cache
 RUN mkdir -p /app/models /app/logs /app/.cache \

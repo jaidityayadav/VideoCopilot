@@ -16,14 +16,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+
 # Set working directory in builder
 WORKDIR /tmp
 
 # Copy only requirements for caching
 COPY requirements.txt .
 
-# Install dependencies into a custom prefix to keep the image small
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# Create virtual environment and install dependencies
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # ===== Stage 2: Production =====
 FROM python:3.11-slim
@@ -31,10 +34,8 @@ FROM python:3.11-slim
 # Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
 
-# Copy installed dependencies from builder
-COPY --from=builder /install /opt/venv
-
-# Set PATH
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install runtime dependencies

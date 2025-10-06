@@ -1,5 +1,9 @@
+
 # ===== Stage 1: Builder =====
 FROM python:3.11-slim AS builder
+
+# Set Prisma Python cache to writable location
+ENV PRISMA_PYTHON_CACHE=/app/.cache/prisma-python
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -17,14 +21,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
+
 # Working directory for building
 WORKDIR /tmp
 
 # Copy only requirements for caching
-COPY video-processing-service/requirements.txt .
+COPY requirements.txt .
 
-# Install dependencies into a custom folder
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# Create virtual environment and install requirements
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # ===== Stage 2: Production =====
 FROM python:3.11-slim
@@ -32,10 +39,8 @@ FROM python:3.11-slim
 # Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
 
-# Copy installed dependencies from builder
-COPY --from=builder /install /opt/venv
-
-# Set PATH
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install runtime dependencies (minimal)
@@ -48,16 +53,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
-# Copy only application code
-COPY video-processing-service/ /app/
+
+# Copy application code
+COPY . /app/
+
+# Generate Prisma client during build (as root)
+WORKDIR /app
+RUN /opt/venv/bin/prisma generate || true
 
 # Create required directories
 RUN mkdir -p /app/uploads /app/temp /app/models /app/logs /app/.cache \
     && chown -R appuser:appuser /app \
     && chown -R appuser:appuser /home/appuser
 
+
 # Set environment variables
 ENV PRISMA_PYTHON_CACHE=/app/.cache/prisma-python
+
+
+# Remove any root-owned Prisma cache to avoid permission issues
+RUN rm -rf /root/.cache/prisma-python || true
 
 # Switch to non-root user
 USER appuser

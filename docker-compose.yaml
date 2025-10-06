@@ -9,7 +9,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=${DATABASE_URL}  # Neon DB connection string
+      - DATABASE_URL=${DATABASE_URL}
       - NEXTAUTH_URL=http://localhost:3000
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
       - JWT_SECRET=${JWT_SECRET}
@@ -35,8 +35,8 @@ services:
   # Embedding Service - depends on web-app for DB schema
   embedding-service:
     build:
-      context: .
-      dockerfile: embedding-service/Dockerfile
+      context: ./embedding-service
+      dockerfile: Dockerfile
     volumes:
       - embedding_models:/app/models
       - ./logs/embedding:/app/logs
@@ -45,6 +45,7 @@ services:
     ports:
       - "8001:8001"
     environment:
+      - DATABASE_URL=${DATABASE_URL}
       - PINECONE_API_KEY=${PINECONE_API_KEY}
       - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
@@ -67,8 +68,8 @@ services:
   # Intelligence Service - depends on embedding service
   intelligence-service:
     build:
-      context: .
-      dockerfile: intelligence-service/Dockerfile
+      context: ./intelligence-service
+      dockerfile: Dockerfile
     volumes:
       - intelligence_models:/app/models
       - ./logs/intelligence:/app/logs
@@ -77,6 +78,7 @@ services:
     ports:
       - "8002:8002"
     environment:
+      - DATABASE_URL=${DATABASE_URL}
       - EMBEDDING_SERVICE_URL=http://embedding-service:8000
       - PINECONE_API_KEY=${PINECONE_API_KEY}
       - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME}
@@ -101,8 +103,8 @@ services:
   # Video Processing Service - depends on intelligence service (uses Prisma)
   video-processing-service:
     build:
-      context: .
-      dockerfile: video-processing-service/Dockerfile
+      context: ./video-processing-service
+      dockerfile: Dockerfile
     volumes:
       - video_processing_models:/app/models
       - ./logs/video-processing:/app/logs
@@ -114,7 +116,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=${DATABASE_URL}  # Neon DB connection string
+      - DATABASE_URL=${DATABASE_URL}
+      - PRISMA_PYTHON_CACHE=/app/.cache/prisma-python
       - EMBEDDING_SERVICE_URL=http://embedding-service:8001
       - INTELLIGENCE_SERVICE_URL=http://intelligence-service:8002
       - PINECONE_API_KEY=${PINECONE_API_KEY}
@@ -135,9 +138,7 @@ services:
     # Duplicate volumes removed
     networks:
       - videocopilot
-    command: >
-      sh -c "prisma generate && 
-             python main.py"
+    command: python main.py
 
 volumes:
   embedding_models:
