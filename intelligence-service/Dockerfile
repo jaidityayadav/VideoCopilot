@@ -20,18 +20,18 @@ RUN apt-get update && apt-get install -y \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy and install only service-specific requirements
-COPY intelligence-service/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy only requirements and install
+COPY intelligence-service/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Production stage
 FROM python:3.11-slim
 
-# Create non-root user with home directory first
+# Create non-root user with home directory
 RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
 
-# Copy virtual environment from builder and set ownership
-COPY --from=builder --chown=appuser:appuser /opt/venv /opt/venv
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install runtime dependencies
@@ -42,27 +42,27 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy application code
-COPY . .
+# Copy only application code
+COPY intelligence-service/ /app/
 
 # Create necessary directories including cache
 RUN mkdir -p /app/models /app/logs /app/.cache \
     && chown -R appuser:appuser /app \
     && chown -R appuser:appuser /home/appuser
 
-# Set environment variables for any ML model caches
+# Set environment variables for ML model caches
 ENV TRANSFORMERS_CACHE=/app/.cache/transformers
 ENV HF_HOME=/app/.cache/huggingface
 
 # Switch to non-root user
 USER appuser
 
-# Expose port
-EXPOSE 8002
+# Expose port 8001
+EXPOSE 8001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8002/health || exit 1
 
-# Start application with metrics
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]
+# Start application
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002", "--workers", "2"]

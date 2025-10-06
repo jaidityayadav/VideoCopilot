@@ -38,7 +38,6 @@ services:
       context: .
       dockerfile: embedding-service/Dockerfile
     volumes:
-      - ./requirements-common.txt:/requirements-common.txt:ro
       - embedding_models:/app/models
       - ./logs/embedding:/app/logs
     container_name: videocopilot-embedding
@@ -105,7 +104,6 @@ services:
       context: .
       dockerfile: video-processing-service/Dockerfile
     volumes:
-      - ./requirements-common.txt:/requirements-common.txt:ro
       - video_processing_models:/app/models
       - ./logs/video-processing:/app/logs
       - video_uploads:/app/uploads

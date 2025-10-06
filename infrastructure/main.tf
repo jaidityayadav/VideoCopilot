@@ -1,70 +1,39 @@
-# Configure the AWS Provider
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "4.0.0"
+
+  name = "eks-vpc"
+  cidr = "10.0.0.0/16"
+
+  azs             = ["${var.aws_region}a", "${var.aws_region}b", "${var.aws_region}c"]
+  public_subnets  = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  private_subnets = ["10.0.11.0/24", "10.0.12.0/24", "10.0.13.0/24"]
+
+  enable_nat_gateway = true
+  single_nat_gateway = true
+}
+
+module "eks" {
+  source          = "terraform-aws-modules/eks/aws"
+  version         = "19.0.0"  # Example, choose latest compatible
+
+  cluster_name    = var.cluster_name
+  cluster_version = "1.28"
+
+  subnets         = module.vpc.private_subnets
+  vpc_id          = module.vpc.vpc_id
+
+  node_groups = {
+    eks_nodes = {
+      desired_capacity = var.node_group_size
+      max_capacity     = var.node_group_size
+      min_capacity     = var.node_group_size
+
+      instance_type = var.node_instance_type
+      key_name      = var.key_name
+
+      additional_security_group_ids = [module.vpc.default_security_group_id]
     }
   }
 }
 
-provider "aws" {
-  region = var.aws_region
-}
-
-# Get the default VPC
-data "aws_vpc" "default" {
-  default = true
-}
-
-# Security Group
-resource "aws_security_group" "videocopilot_sg" {
-  name        = "videocopilot-security-group"
-  description = "Security group for VideoCopilot application"
-  vpc_id      = data.aws_vpc.default.id
-
-
-  # Allow all inbound traffic (all ports, all protocols)
-  ingress {
-    description = "Allow all inbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-
-  # All outbound traffic
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "videocopilot-sg"
-  }
-}
-
-# EC2 Instance
-resource "aws_instance" "videocopilot_instance" {
-  ami                    = var.ami_id
-  instance_type          = var.instance_type
-  key_name              = var.key_name
-  vpc_security_group_ids = [aws_security_group.videocopilot_sg.id]
-
-  # Enable detailed monitoring
-  monitoring = true
-
-  # Root block device configuration
-  root_block_device {
-    volume_type = "gp3"
-    volume_size = 20
-    encrypted   = true
-  }
-
-  tags = {
-    Name = var.instance_name
-  }
-}
