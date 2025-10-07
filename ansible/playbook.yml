@@ -1,0 +1,135 @@
+---
+- name: Setup Amazon Linux 2 Environment
+  hosts: all
+  become: yes
+
+  vars:
+    node_version: "20"
+    python_version: "3.11"
+    ffmpeg_url: "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+    ollama_model: "qllama/bge-small-en-v1.5:latest"
+    ollama_service_path: "/etc/systemd/system/ollama.service"
+
+  tasks:
+    - name: Update system
+      yum:
+        name: "*"
+        state: latest
+
+    - name: Install essential packages
+      yum:
+        name:
+          - wget
+          - tar
+          - git
+          - unzip
+          - gcc
+          - make
+          - gcc-c++
+        state: present
+
+    - name: Install Node.js
+      shell: |
+        curl -fsSL https://rpm.nodesource.com/setup_{{ node_version }}.x | bash -
+        yum install -y nodejs
+      args:
+        executable: /bin/bash
+
+    - name: Install Python
+      shell: |
+        amazon-linux-extras enable python{{ python_version | replace('.', '') }}
+        yum install -y python{{ python_version }}
+      args:
+        executable: /bin/bash
+
+    - name: Install pip
+      package:
+        name: python3-pip
+        state: present
+
+    - name: Install Docker
+      yum:
+        name: docker
+        state: present
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Add ec2-user to docker group
+      user:
+        name: ec2-user
+        groups: docker
+        append: yes
+
+    - name: Install PM2 globally
+      npm:
+        name: pm2
+        global: yes
+
+    - name: Install Ollama via official script
+      shell: curl https://ollama.com/install.sh | sh
+      args:
+        creates: /usr/local/bin/ollama
+
+    - name: Pull Ollama model
+      shell: ollama pull {{ ollama_model }}
+      args:
+        creates: "/home/ec2-user/.ollama/models/{{ ollama_model | replace('/', '_') | replace(':', '_') }}"
+
+    - name: Create Ollama systemd service
+      copy:
+        dest: "{{ ollama_service_path }}"
+        content: |
+          [Unit]
+          Description=Ollama Model Server
+          After=network.target
+
+          [Service]
+          User=ec2-user
+          ExecStart=/usr/local/bin/ollama serve {{ ollama_model }} --port 11434
+          Restart=always
+          RestartSec=5
+          WorkingDirectory=/home/ec2-user
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - Reload systemd
+
+    - name: Start Ollama service
+      systemd:
+        name: ollama
+        enabled: yes
+        state: started
+
+    - name: Download static build of ffmpeg
+      get_url:
+        url: "{{ ffmpeg_url }}"
+        dest: /tmp/ffmpeg-release.tar.xz
+
+    - name: Extract ffmpeg
+      unarchive:
+        src: /tmp/ffmpeg-release.tar.xz
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Copy ffmpeg binaries to /usr/local/bin
+      shell: |
+        cd /tmp/ffmpeg-*-amd64-static
+        cp ffmpeg ffprobe /usr/local/bin/
+      args:
+        creates: /usr/local/bin/ffmpeg
+
+    - name: Ensure ffmpeg is installed
+      command: ffmpeg -version
+      register: ffmpeg_version
+
+    - debug:
+        msg: "{{ ffmpeg_version.stdout }}"
+
+  handlers:
+    - name: Reload systemd
+      command: systemctl daemon-reload
