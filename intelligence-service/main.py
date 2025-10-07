@@ -15,7 +15,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import pinecone
 from pinecone import Pinecone, ServerlessSpec
 
 # LangChain imports
@@ -45,16 +44,21 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "vidwise-embeddings")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Initialize Pinecone
+PINECONE_ENV = "us-east1-aws"  # Your Pinecone environment
+
+# Create Pinecone client instance
 pc = Pinecone(api_key=PINECONE_API_KEY)
-# Example: create or connect to index
+
+# Create index if it doesn't exist
 if PINECONE_INDEX_NAME not in pc.list_indexes().names():
     pc.create_index(
         name=PINECONE_INDEX_NAME,
-        dimension=1536,  # set your dimension
-        metric='cosine',  # or 'euclidean'
-        spec=ServerlessSpec(cloud='aws', region='us-west-2')  # set your cloud/region
+        dimension=1536,
+        metric="cosine",
+        spec=ServerlessSpec(cloud="aws", region="us-east1")
     )
+
+# Connect to index
 index = pc.Index(PINECONE_INDEX_NAME)
 
 # Ollama Embeddings class
