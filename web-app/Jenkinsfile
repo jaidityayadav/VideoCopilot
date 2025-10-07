@@ -1,50 +1,59 @@
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    APP_NAME = "videocopilot-web-app"
-    IMAGE_NAME = "ghcr.io/jaidityayadav/${APP_NAME}:latest"
-    CONTAINER_NAME = "videocopilot_web"
-    PORT = "3000"
-    ENV_FILE = "/home/ec2-user/VideoCopilot/web-app/.env"
-    SSH_KEY_ID = "git" // Jenkins credential ID
-  }
+    environment {
+        APP_NAME = "videocopilot-web-app"
+        REPO_URL = "git@github.com:jaidityayadav/VideoCopilot.git"
+        BRANCH = "main"
+        APP_DIR = "/home/ec2-user/VideoCopilot"
+        NODE_ENV = "production"
+        SSH_KEY_ID = "git" // Jenkins credential ID for your SSH key
+    }
 
-  stages {
-    stage('Checkout via SSH') {
-      steps {
-        sshagent([env.SSH_KEY_ID]) {
-          sh 'git clone git@github.com:jaidityayadav/VideoCopilot.git'
+    stages {
+        stage('Checkout via SSH') {
+            steps {
+                sshagent([env.SSH_KEY_ID]) {
+                    sh """
+                        rm -rf ${APP_DIR}
+                        git clone -b ${BRANCH} ${REPO_URL} ${APP_DIR}
+                    """
+                }
+            }
         }
-      }
+
+        stage('Install Dependencies') {
+            steps {
+                dir("${APP_DIR}/web-app") {
+                    sh "npm ci"
+                }
+            }
+        }
+
+        stage('Prisma Setup') {
+            steps {
+                dir("${APP_DIR}/web-app") {
+                    sh "npx prisma generate"
+                    sh "npx prisma migrate deploy || true"
+                }
+            }
+        }
+
+        stage('Run Application') {
+            steps {
+                dir("${APP_DIR}/web-app") {
+                    sh "npm run start"
+                }
+            }
+        }
     }
 
-    stage('Pull Image') {
-      steps {
-        sh "docker pull ${IMAGE_NAME}"
-      }
+    post {
+        success {
+            echo "Deployment successful!"
+        }
+        failure {
+            echo "Deployment failed."
+        }
     }
-
-    stage('Deploy Container') {
-      steps {
-        sh """
-          docker rm -f ${CONTAINER_NAME} || true
-          docker run -d \
-            --name ${CONTAINER_NAME} \
-            -p ${PORT}:3000 \
-            --env-file ${ENV_FILE} \
-            ${IMAGE_NAME}
-        """
-      }
-    }
-  }
-
-  post {
-    success {
-      echo "Deployment successful!"
-    }
-    failure {
-      echo "Deployment failed."
-    }
-  }
 }
