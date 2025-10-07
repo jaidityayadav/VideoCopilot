@@ -1,0 +1,88 @@
+pipeline {
+  agent any
+
+  environment {
+    APP_NAME = "videocopilot-web-app"
+    IMAGE_NAME = "ghcr.io/jaidityayadav/${APP_NAME}:latest"
+    CONTAINER_NAME = "videocopilot_web"
+    PORT = "3000"
+
+    // Prisma and Node setup
+    NODE_ENV = "production"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        echo "Checking out repository..."
+        checkout scm
+      }
+    }
+
+    stage('Install Dependencies') {
+      steps {
+        dir('web-app') {
+          echo "Installing npm dependencies..."
+          sh 'npm ci'
+        }
+      }
+    }
+
+    stage('Prisma Setup') {
+      steps {
+        dir('web-app') {
+          echo "Running Prisma generate & migrate..."
+          sh 'npx prisma generate'
+          sh 'npx prisma migrate deploy || true'
+        }
+      }
+    }
+
+    stage('Build Docker Image') {
+      steps {
+        dir('web-app') {
+          echo "Building Docker image..."
+          sh "docker build -t ${IMAGE_NAME} ."
+        }
+      }
+    }
+
+    stage('Login to GHCR') {
+      steps {
+        withCredentials([string(credentialsId: 'ghcr-token', variable: 'GHCR_TOKEN')]) {
+          sh 'echo $GHCR_TOKEN | docker login ghcr.io -u jaidityayadav --password-stdin'
+        }
+      }
+    }
+
+    stage('Push Image to GHCR') {
+      steps {
+        sh "docker push ${IMAGE_NAME}"
+      }
+    }
+
+    stage('Deploy Container') {
+      steps {
+        echo "Deploying container..."
+        sh """
+          docker rm -f ${CONTAINER_NAME} || true
+          docker pull ${IMAGE_NAME}
+          docker run -d \
+            --name ${CONTAINER_NAME} \
+            -p ${PORT}:3000 \
+            --env-file /home/ec2-user/VideoCopilot/web-app/.env \
+            ${IMAGE_NAME}
+        """
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "Deployment successful!"
+    }
+    failure {
+      echo "Deployment failed. Check Jenkins logs."
+    }
+  }
+}
