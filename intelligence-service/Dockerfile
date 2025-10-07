@@ -1,14 +1,14 @@
-# ===== Stage 1: Builder =====
-FROM python:3.11-slim AS builder
+# Multi-stage build for optimized Python container
+FROM python:3.11-slim as builder
 
-# Environment variables for pip & Python
+# Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
     g++ \
@@ -16,22 +16,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-
-# Set working directory in builder
-WORKDIR /tmp
-
-# Copy only requirements for caching
-COPY requirements.txt .
-
-# Create virtual environment and install dependencies
+# Create virtual environment and install requirements
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+COPY requirements.txt .
 RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
-# ===== Stage 2: Production =====
+# Production stage
 FROM python:3.11-slim
 
-# Create non-root user
+# Create non-root user with home directory
 RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
 
 # Copy virtual environment from builder
@@ -39,15 +33,14 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy only application code
-COPY . .
+COPY . /app/
 
 # Create necessary directories including cache
 RUN mkdir -p /app/models /app/logs /app/.cache \
@@ -65,8 +58,8 @@ USER appuser
 EXPOSE 8001
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8001/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8002/health || exit 1
 
 # Start application
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002", "--workers", "2"]

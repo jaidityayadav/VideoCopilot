@@ -1,0 +1,31 @@
+# Ignore Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# Ignore virtual environments
+venv/
+.env/
+__pycache__/
+*.pyc
+
+# Ignore Node modules
+node_modules/
+
+# Ignore logs, caches, models
+logs/
+*.log
+app/.cache/
+models/
+uploads/
+temp/
+
+# Ignore Git and build junk
+.git/
+.gitignore
+.DS_Store
+
+# Ignore Docker stuff
+*.pid
+*.sock
+docker-compose.override.yml

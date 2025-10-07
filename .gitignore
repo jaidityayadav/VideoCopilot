@@ -1,5 +1,77 @@
-**/.DS_STORE
-**/.env
-**/.env.docker
-**/.env.local
 **/venv/
+**/terraform.tfvars
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Ansible sensitive files
+ansible/inventory.ini
+ansible/vault.yml
+ansible/k3s.yaml
+ansible/group_vars/*/vault.yml
+ansible/host_vars/*/vault.yml
+
+# Kubernetes secrets
+k8s/*secrets*.yaml
+k8s/*secret*.yaml
+**/secrets.yaml
+**/secret.yaml
+**/app-config.yaml
+**/app-secrets.yaml
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfplan
+.terraform/
+.terraform.lock.hcl
+terraform.rc
+
+# SSH keys and certificates
+*.pem
+*.key
+*.crt
+id_rsa*
+
+# Docker secrets
+docker-compose.override.yml
+
+# Logs
+*.log
+logs/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Python
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg

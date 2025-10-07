@@ -15,13 +15,11 @@ from sklearn.metrics.pairwise import cosine_similarity
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from pinecone import Pinecone
+from pinecone import Pinecone, ServerlessSpec
 
 # LangChain imports
 from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEmbeddings
-from transformers import AutoTokenizer, AutoModel
-import torch
 from langchain_pinecone import PineconeVectorStore
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferWindowMemory
@@ -46,53 +44,48 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "vidwise-embeddings")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Initialize Pinecone
+PINECONE_ENV = "us-east1-aws"  # Your Pinecone environment
+
+# Create Pinecone client instance
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# Initialize embedding model for user queries
-MODEL_NAME = "BAAI/bge-small-en"
+# Create index if it doesn't exist
+if PINECONE_INDEX_NAME not in pc.list_indexes().names():
+    pc.create_index(
+        name=PINECONE_INDEX_NAME,
+        dimension=1536,
+        metric="cosine",
+        spec=ServerlessSpec(cloud="aws", region="us-east1")
+    )
 
-# Load embedding model and tokenizer (same as embedding-service)
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-embedding_model = AutoModel.from_pretrained(MODEL_NAME)
+# Connect to index
+index = pc.Index(PINECONE_INDEX_NAME)
 
-class CustomEmbeddings:
-    """Custom embedding class that matches the embedding-service implementation"""
-    
+# Ollama Embeddings class
+class OllamaEmbeddings:
+    """Embeddings using Ollama API (http://localhost:11434/api/embed)"""
+    def __init__(self, model: str = "qllama/bge-small-en-v1.5", api_url: str = "http://localhost:11434/api/embed"):
+        self.model = model
+        self.api_url = api_url
+
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """Embed a list of documents"""
-        embeddings = []
-        for text in texts:
-            embeddings.append(self.embed_query(text))
-        return embeddings
-    
+        return [self.embed_query(text) for text in texts]
+
     def embed_query(self, text: str) -> List[float]:
-        """Embed a single query using the same approach as embedding-service"""
-        logger.info(f"CustomEmbeddings: Generating embedding for query: '{text[:30]}...'")
-        
-        # Handle empty text
-        if text.strip() == "":
-            return [0.0] * 384
-            
-        # Tokenize and encode with same parameters as embedding-service
-        inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
-        
-        # Generate embeddings
-        with torch.no_grad():
-            outputs = embedding_model(**inputs)
-            # Use mean pooling of last hidden states - simple approach
-            embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
-            
-            # Always normalize vectors for cosine similarity
-            norm = np.linalg.norm(embedding)
-            if norm > 0:
-                embedding = embedding / norm
-            
-            embedding_list = embedding.tolist()
-        
-        logger.info(f"CustomEmbeddings: Generated normalized embedding vector of length {len(embedding_list)}")
-        
-        return embedding_list
+        payload = {"model": self.model, "input": text}
+        try:
+            response = httpx.post(self.api_url, json=payload, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            embeddings = data.get("embeddings")
+            embedding = embeddings[0] if embeddings and len(embeddings) > 0 else []
+            if embedding is None:
+                logger.error(f"Ollama API did not return embedding for input: {text[:30]}...")
+                return []
+            return embedding
+        except Exception as e:
+            logger.error(f"Ollama API error: {e}")
+            return []
 
 # Pydantic models
 class ProjectInfo(BaseModel):
@@ -152,11 +145,11 @@ class IntelligenceService:
         self.db_pool = None
         self.pinecone_index_name = PINECONE_INDEX_NAME
         self.pc = pc
-        
+
         # Initialize embeddings with explicit logging
-        logger.info("Creating custom embedding instance that exactly matches embedding-service")
-        self.embeddings = CustomEmbeddings()
-        
+        logger.info("Using Ollama API for embeddings")
+        self.embeddings = OllamaEmbeddings()
+
         # Initialize Groq LLM
         self.llm = ChatGroq(
             api_key=GROQ_API_KEY,
@@ -164,10 +157,10 @@ class IntelligenceService:
             temperature=0.7,
             max_tokens=1024
         )
-        
+
         # Store retrieval chains per project
         self.project_chains: Dict[str, ConversationalRetrievalChain] = {}
-        
+
         logger.info("Intelligence service initialized with Groq LLM and RAG")
     
     async def connect(self):

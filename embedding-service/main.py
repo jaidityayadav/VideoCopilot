@@ -14,8 +14,6 @@ import boto3
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from transformers import AutoTokenizer, AutoModel
-import torch
 import numpy as np
 from pinecone import Pinecone
 import tiktoken
@@ -36,10 +34,10 @@ s3_client = boto3.client(
 # Initialize Pinecone
 pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
 
-# Embedding model setup
-MODEL_NAME = "BAAI/bge-small-en"
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-model = AutoModel.from_pretrained(MODEL_NAME)
+
+# Ollama API embedding setup
+OLLAMA_MODEL = "qllama/bge-small-en-v1.5"
+OLLAMA_API_URL = "http://localhost:11434/api/embed"
 
 # For token counting (using tiktoken for better accuracy)
 encoding = tiktoken.get_encoding("cl100k_base")
@@ -223,22 +221,26 @@ class EmbeddingService:
         return chunks
     
     async def _generate_embeddings(self, chunks: List[str]) -> List[List[float]]:
-        """Generate embeddings for each chunk using BAAI/bge-small-en"""
+        """Generate embeddings for each chunk using Ollama API"""
+        import httpx
         embeddings = []
-        
         for i, chunk in enumerate(chunks):
-            print(f"🧠 Generating embedding {i+1}/{len(chunks)}")
-            
-            # Tokenize and encode
-            inputs = tokenizer(chunk, return_tensors="pt", padding=True, truncation=True, max_length=512)
-            
-            # Generate embeddings
-            with torch.no_grad():
-                outputs = model(**inputs)
-                # Use mean pooling of last hidden states
-                embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
-                embeddings.append(embedding.tolist())
-        
+            print(f"🧠 Generating embedding {i+1}/{len(chunks)} (Ollama API)")
+            payload = {"model": OLLAMA_MODEL, "input": chunk}
+            try:
+                response = httpx.post(OLLAMA_API_URL, json=payload, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                embedding_list = data.get("embeddings")
+                embedding = embedding_list[0] if embedding_list and len(embedding_list) > 0 else []
+                if not embedding:
+                    print(f"❌ Ollama API did not return embedding for chunk {i+1}")
+                    embeddings.append([])
+                else:
+                    embeddings.append(embedding)
+            except Exception as e:
+                print(f"❌ Ollama API error for chunk {i+1}: {e}")
+                embeddings.append([])
         return embeddings
     
     async def _store_in_pinecone(self, project_id: str, chunks: List[str], embeddings: List[List[float]]):

@@ -232,7 +232,7 @@ async def download_video_from_s3(s3_url: str) -> str:
     else:
         # Handle case where only the S3 key is provided
         # Use default bucket from environment or hardcoded
-        bucket_name = os.getenv('S3_BUCKET_NAME', 'vidwise')
+        bucket_name = os.getenv('AWS_S3_BUCKET', 'vidwise')
         key = s3_url
     
     # Downloading video from S3...
@@ -314,7 +314,7 @@ async def process_transcript(video_path: str, language: str, user_id: str, proje
         
         # Upload SRT to S3
         s3_key = f"{user_id}/{project_id}/transcripts/{srt_filename}"
-        bucket_name = os.getenv('S3_BUCKET_NAME', 'vidwise')
+        bucket_name = os.getenv('AWS_S3_BUCKET', 'vidwise')
         
         # Upload SRT to S3
         s3_client.upload_file(srt_path, bucket_name, s3_key)
@@ -499,7 +499,7 @@ async def convert_srt_to_txt_and_upload(transcript_id: str, srt_content: str, us
         
         # Upload TXT content to S3
         s3_client.put_object(
-            Bucket=os.getenv('S3_BUCKET_NAME'),
+            Bucket=os.getenv('AWS_S3_BUCKET'),
             Key=txt_s3_key,
             Body=txt_content.encode('utf-8'),
             ContentType='text/plain',
@@ -513,7 +513,7 @@ async def convert_srt_to_txt_and_upload(transcript_id: str, srt_content: str, us
         )
         
         # Generate S3 URL
-        txt_s3_url = f"s3://{os.getenv('S3_BUCKET_NAME')}/{txt_s3_key}"
+        txt_s3_url = f"s3://{os.getenv('AWS_S3_BUCKET')}/{txt_s3_key}"
         
         # Update transcript record with TXT URL
         await prisma.transcript.update(

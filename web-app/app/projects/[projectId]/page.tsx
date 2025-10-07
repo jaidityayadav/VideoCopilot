@@ -317,7 +317,7 @@ export default function ProjectDetail({ params }: { params: Promise<{ projectId:
     const connectToChat = () => {
         if (wsRef.current || !project) return;
 
-        const wsUrl = `ws://localhost:8002/chat/${project.id}`;
+        const wsUrl = `ws://${process.env.PUBLIC_EC2_IP}/chat/${project.id}`;
         console.log('Connecting to intelligence service:', wsUrl);
 
         wsRef.current = new WebSocket(wsUrl);
