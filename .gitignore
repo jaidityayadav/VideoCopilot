@@ -8,6 +8,7 @@
 # Ansible sensitive files
 ansible/inventory.ini
 ansible/vault.yml
+ansible/k3s.yaml
 ansible/group_vars/*/vault.yml
 ansible/host_vars/*/vault.yml
 
