@@ -28,7 +28,7 @@ pipeline {
         stage('Run Application') {
             steps {
                 dir(APP_DIR) {
-                    sh "pm2 start npm --name ${APP_NAME} -- start"
+                    sh "pm2 start npm --name ${APP_NAME} --interpreter none -- start"
                 }
             }
         }
