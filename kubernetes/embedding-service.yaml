@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-service
+  namespace: videocopilot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: embedding-service
+  template:
+    metadata:
+      labels:
+        app: embedding-service
+    spec:
+      containers:
+        - name: embedding-service
+          image: jaiditya/videocopilot-embedding:latest
+          ports:
+            - containerPort: 8001
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://neon-db-url"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: embedding-service
+  namespace: videocopilot
+spec:
+  selector:
+    app: embedding-service
+  ports:
+    - port: 8001
+      targetPort: 8001
